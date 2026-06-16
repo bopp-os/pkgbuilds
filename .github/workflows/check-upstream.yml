@@ -1,0 +1,118 @@
+name: Check Upstream AUR Updates
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: sudo apt-get install -y git curl gettext-base
+
+      - name: Check upstream AUR PKGBUILDs and open PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          updated_packages=()
+
+          for pkg_dir in packages/*/; do
+            pkg_name=$(basename "$pkg_dir")
+
+            # Allow override via .upstream-name
+            upstream_name="$pkg_name"
+            if [[ -f "$pkg_dir/.upstream-name" ]]; then
+              upstream_name=$(cat "$pkg_dir/.upstream-name" | tr -d '[:space:]')
+            fi
+
+            local_pkgbuild="$pkg_dir/PKGBUILD"
+            if [[ ! -f "$local_pkgbuild" ]]; then
+              echo "::warning::No PKGBUILD found for $pkg_name, skipping"
+              continue
+            fi
+
+            upstream_url="https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=${upstream_name}"
+            source_type="AUR"
+            if [[ -f "$pkg_dir/.upstream-url" ]]; then
+              upstream_url=$(cat "$pkg_dir/.upstream-url" | tr -d '[:space:]')
+              source_type="Custom URL"
+            fi
+
+            echo "--- Checking $pkg_name ($source_type: $upstream_name) ---"
+
+            # Fetch upstream PKGBUILD
+            upstream_pkgbuild=$(curl -fsSL "$upstream_url" 2>/dev/null || true)
+
+            if [[ -z "$upstream_pkgbuild" ]]; then
+              echo "::warning::Could not fetch upstream PKGBUILD for $upstream_name"
+              continue
+            fi
+
+            # Compare
+            if diff <(echo "$upstream_pkgbuild") "$local_pkgbuild" > /dev/null 2>&1; then
+              echo "  ✓ $pkg_name is up to date"
+              continue
+            fi
+
+            echo "  ↑ $pkg_name has upstream changes"
+
+            branch="upstream-update/${pkg_name}"
+
+            # Delete stale branch if it exists (previous unmerged update)
+            git push origin --delete "$branch" 2>/dev/null || true
+
+            git checkout -b "$branch"
+
+            # Write upstream PKGBUILD
+            echo "$upstream_pkgbuild" > "$local_pkgbuild"
+
+            # Extract upstream pkgver for commit message
+            upstream_ver=$(echo "$upstream_pkgbuild" | grep -m1 '^pkgver=' | cut -d= -f2 || echo "unknown")
+            local_ver=$(grep -m1 '^pkgver=' "$local_pkgbuild.orig" 2>/dev/null | cut -d= -f2 || echo "unknown")
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+
+            git add "$local_pkgbuild"
+            git commit -m "upstream($pkg_name): update to $upstream_ver"
+
+            git push origin "$branch"
+
+            # Build diff for PR body
+            diff_output=$(diff <(git show HEAD~1:"$local_pkgbuild" 2>/dev/null || echo "") "$local_pkgbuild" || true)
+
+            export PKG_NAME="$pkg_name"
+            export DIFF_OUTPUT="$diff_output"
+            
+            if [[ "$source_type" == "AUR" ]]; then
+              export SOURCE_INFO="**AUR package:** \`$upstream_name\`"$'\n'"**AUR PKGBUILD:** cgit"
+            else
+              export SOURCE_INFO="**Upstream source type:** \`Custom URL\`"$'\n'"**Upstream PKGBUILD:** Link"
+            fi
+
+            # Safely substitute ONLY our specific variables (prevents clobbering bash variables inside diff payloads)
+            envsubst '${PKG_NAME} ${SOURCE_INFO} ${DIFF_OUTPUT}' < .github/upstream-pr-template.md > pr_body.md
+
+            gh pr create \
+              --repo "$REPO" \
+              --title "upstream($pkg_name): update to $upstream_ver" \
+              --body-file pr_body.md \
+              --base main \
+              --head "$branch" \
+              --label "upstream-update" \
+              || echo "::warning::PR creation failed or already exists for $pkg_name"
+          done
