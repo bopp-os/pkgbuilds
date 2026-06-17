@@ -29,6 +29,9 @@ jobs:
         with:
           fetch-depth: 2
 
+      - name: Clean root-owned files from previous build
+        run: sudo rm -rf /opt/github-runner/_work/pkgbuilds/pkgbuilds/built-pkgs
+
       - name: Detect changed packages
         id: detect
         run: |
@@ -111,6 +114,13 @@ jobs:
           name: pkg-${{ matrix.package }}
           path: built-pkgs/*.pkg.tar.zst
           retention-days: 7
+
+      - name: Clean build artifacts
+        if: always()
+        run: |
+          # Fix ownership so the runner can clean up on next run
+          chown -R $(stat -c %u /opt/github-runner/_work) \
+            /opt/github-runner/_work/pkgbuilds/ 2>/dev/null || true
 
   publish-repo:
     needs: build
