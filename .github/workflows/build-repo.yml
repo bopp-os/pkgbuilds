@@ -28,7 +28,7 @@ jobs:
       - name: Clean root-owned files from previous build
         run: sudo rm -rf /opt/github-runner/_work/pkgbuilds/pkgbuilds/built-pkgs
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 2
 
@@ -68,7 +68,7 @@ jobs:
       fail-fast: false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install build deps
         run: |
@@ -109,7 +109,7 @@ jobs:
           done
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pkg-${{ matrix.package }}
           path: built-pkgs/*.pkg.tar.zst
@@ -127,7 +127,7 @@ jobs:
     runs-on: [self-hosted, x86-64-v3]   # already on proxima-a, no SSH needed
     steps:
       - name: Download all built packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: pkg-*
           path: new-pkgs
