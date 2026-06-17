@@ -61,6 +61,11 @@ for pkg_name in "${targets[@]}"; do
     continue
   fi
 
+  if ! echo "$upstream_pkgbuild" | grep -q 'pkgver='; then
+    echo -e "${YELLOW}⚠ Fetched content does not look like a valid PKGBUILD (missing pkgver=). Check .upstream-url.${RESET}"
+    continue
+  fi
+
   if diff <(echo "$upstream_pkgbuild") "$local_pkgbuild" > /dev/null 2>&1; then
     echo -e "${GREEN}✓ up to date${RESET}"
   else

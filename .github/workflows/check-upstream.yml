@@ -62,6 +62,12 @@ jobs:
               continue
             fi
 
+            # Validate it's a real PKGBUILD (prevents accidentally fetching HTML pages)
+            if ! echo "$upstream_pkgbuild" | grep -q 'pkgver='; then
+              echo "::warning::Fetched content for $upstream_name does not look like a valid PKGBUILD (missing pkgver=). Check .upstream-url to ensure it is a raw text link."
+              continue
+            fi
+
             # Compare
             if diff <(echo "$upstream_pkgbuild") "$local_pkgbuild" > /dev/null 2>&1; then
               echo "  ✓ $pkg_name is up to date"
@@ -92,11 +98,10 @@ jobs:
 
             git push origin "$branch"
 
-            # Build diff for PR body
-            diff_output=$(diff <(git show HEAD~1:"$local_pkgbuild" 2>/dev/null || echo "") "$local_pkgbuild" || true)
+            # Build diff for PR body into a file to prevent "Argument list too long" (E2BIG)
+            diff <(git show HEAD~1:"$local_pkgbuild" 2>/dev/null || echo "") "$local_pkgbuild" > diff.txt || true
 
             export PKG_NAME="$pkg_name"
-            export DIFF_OUTPUT="$diff_output"
             
             if [[ "$source_type" == "AUR" ]]; then
               export SOURCE_INFO="**AUR package:** \`$upstream_name\`"$'\n'"**AUR PKGBUILD:** cgit"
@@ -104,8 +109,11 @@ jobs:
               export SOURCE_INFO="**Upstream source type:** \`Custom URL\`"$'\n'"**Upstream PKGBUILD:** Link"
             fi
 
-            # Safely substitute ONLY our specific variables (prevents clobbering bash variables inside diff payloads)
-            envsubst '${PKG_NAME} ${SOURCE_INFO} ${DIFF_OUTPUT}' < .github/upstream-pr-template.md > pr_body.md
+            # Safely substitute ONLY our short variables
+            envsubst '${PKG_NAME} ${SOURCE_INFO}' < .github/upstream-pr-template.md > pr_body_temp.md
+
+            # Inject the multi-line diff directly from the file to avoid environment size limits
+            sed -e '/\${DIFF_OUTPUT}/ {' -e 'r diff.txt' -e 'd' -e '}' pr_body_temp.md > pr_body.md
 
             gh pr create \
               --repo "$REPO" \
