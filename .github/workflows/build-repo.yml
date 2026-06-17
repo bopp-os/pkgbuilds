@@ -28,12 +28,18 @@ jobs:
         id: detect
         run: |
           if [[ -n "${{ inputs.package }}" ]]; then
-            # Manual dispatch with specific package
             echo "packages=[\"${{ inputs.package }}\"]" >> "$GITHUB_OUTPUT"
           else
-            # Get packages changed in this push
-            changed=$(git diff --name-only HEAD~1 HEAD -- 'packages/**/PKGBUILD' \
+            # If only one commit exists, diff against empty tree
+            if git rev-parse HEAD~1 &>/dev/null; then
+              base="HEAD~1"
+            else
+              base="$(git hash-object -t tree /dev/null)"
+            fi
+
+            changed=$(git diff --name-only "$base" HEAD -- 'packages/**/PKGBUILD' \
               | sed 's|packages/\([^/]*\)/.*|\1|' | sort -u | jq -R . | jq -sc .)
+
             echo "packages=$changed" >> "$GITHUB_OUTPUT"
           fi
 
@@ -79,13 +85,8 @@ jobs:
 
   publish-repo:
     needs: build
-    runs-on: [self-hosted, x86-64-v3]
+    runs-on: [self-hosted, x86-64-v3]   # already on proxima-a, no SSH needed
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: gh-pages          # repo DB lives here
-          path: repo
-
       - name: Download all built packages
         uses: actions/download-artifact@v4
         with:
@@ -95,25 +96,7 @@ jobs:
 
       - name: Update pacman repo database
         run: |
-          sudo apt-get install -y libarchive-tools  # for bsdtar
-
-          # Install repo-add from Arch tools (via docker)
-          docker run --rm \
-            -v "$PWD/repo:/repo" \
-            -v "$PWD/new-pkgs:/new-pkgs" \
-            archlinux:latest \
-            bash -c "
-              pacman -Sy --noconfirm pacman && \
-              cp /new-pkgs/*.pkg.tar.zst /repo/ && \
-              cd /repo && \
-              repo-add --verify --sign=no bopp-os.db.tar.gz *.pkg.tar.zst
-            "
-
-      - name: Push updated repo to gh-pages
-        working-directory: repo
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "repo: add/update packages from build ${{ github.run_id }}" || echo "Nothing to commit"
-          git push
+          REPO_DIR=/var/www/pacman-repo
+          cp new-pkgs/*.pkg.tar.zst "$REPO_DIR/"
+          cd "$REPO_DIR"
+          repo-add bopp-os.db.tar.gz *.pkg.tar.zst
