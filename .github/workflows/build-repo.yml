@@ -8,6 +8,11 @@ on:
       package:
         description: 'Specific package to rebuild (leave empty for all changed)'
         required: false
+      build_all:
+        description: 'Force rebuild of ALL packages'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -27,7 +32,11 @@ jobs:
       - name: Detect changed packages
         id: detect
         run: |
-          if [[ -n "${{ inputs.package }}" ]]; then
+          if [[ "${{ inputs.build_all }}" == "true" ]]; then
+            all_pkgs=$(git ls-files 'packages/**/PKGBUILD' \
+              | sed 's|packages/\([^/]*\)/.*|\1|' | sort -u | jq -R . | jq -sc .)
+            echo "packages=$all_pkgs" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.package }}" ]]; then
             echo "packages=[\"${{ inputs.package }}\"]" >> "$GITHUB_OUTPUT"
           else
             # If only one commit exists, diff against empty tree
@@ -66,21 +75,27 @@ jobs:
         run: |
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          chown -R builder:builder packages/${{ matrix.package }}
+          for pkg in ${{ matrix.package }}; do
+            chown -R builder:builder "packages/$pkg"
+          done
 
       - name: Build package
         run: |
-          cd packages/${{ matrix.package }}
-          sudo -u builder makepkg -s --noconfirm --noprogressbar
-          
-          # Verify we got a package
-          ls -la *.pkg.tar.zst
+          mkdir -p "$GITHUB_WORKSPACE/built-pkgs"
+          for pkg in ${{ matrix.package }}; do
+            cd "$GITHUB_WORKSPACE/packages/$pkg"
+            sudo -u builder makepkg -s --noconfirm --noprogressbar
+            
+            # Verify we got a package
+            ls -la *.pkg.tar.zst
+            cp *.pkg.tar.zst "$GITHUB_WORKSPACE/built-pkgs/"
+          done
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.package }}
-          path: packages/${{ matrix.package }}/*.pkg.tar.zst
+          path: built-pkgs/*.pkg.tar.zst
           retention-days: 7
 
   publish-repo:
