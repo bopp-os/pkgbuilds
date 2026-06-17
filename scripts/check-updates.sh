@@ -68,14 +68,20 @@ for pkg_name in "${targets[@]}"; do
     source_type="Custom URL"
   fi
 
-  echo -ne "${CYAN}Checking $pkg_name ($source_type: $upstream_name)...${RESET} "
+  echo -e "${CYAN}--- Checking $pkg_name ---${RESET}"
+  echo -e "  Source Type: $source_type"
+  echo -e "  Target URL : $upstream_url"
 
-  upstream_pkgbuild=$(curl -fsSL "$upstream_url" 2>/dev/null || true)
+  upstream_pkgbuild=$(curl -fsSL "$upstream_url" 2>curl_err.txt || true)
 
   if [[ -z "$upstream_pkgbuild" ]]; then
-    echo -e "${YELLOW}⚠ Could not fetch (package gone from upstream?)${RESET}"
+    echo -e "${YELLOW}⚠ Could not fetch PKGBUILD from upstream.${RESET}"
+    echo -e "  Curl stderr:"
+    sed 's/^/    /' curl_err.txt
+    rm -f curl_err.txt
     continue
   fi
+  rm -f curl_err.txt
 
   if ! echo "$upstream_pkgbuild" | grep -q 'pkgver='; then
     echo -e "${YELLOW}⚠ Fetched content does not look like a valid PKGBUILD (missing pkgver=). Check .upstream-url.${RESET}"

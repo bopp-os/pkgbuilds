@@ -68,15 +68,21 @@ jobs:
               source_type="Custom URL"
             fi
 
-            echo "--- Checking $pkg_name ($source_type: $upstream_name) ---"
+            echo "--- Checking $pkg_name ---"
+            echo "  Source Type: $source_type"
+            echo "  Target URL : $upstream_url"
 
             # Fetch upstream PKGBUILD
-            upstream_pkgbuild=$(curl -fsSL "$upstream_url" 2>/dev/null || true)
+            upstream_pkgbuild=$(curl -fsSL "$upstream_url" 2>curl_err.txt || true)
 
             if [[ -z "$upstream_pkgbuild" ]]; then
-              echo "::warning::Could not fetch upstream PKGBUILD for $upstream_name"
+              echo "::warning::Could not fetch upstream PKGBUILD for $pkg_name"
+              echo "  Curl stderr:"
+              cat curl_err.txt | sed 's/^/    /'
+              rm -f curl_err.txt
               continue
             fi
+            rm -f curl_err.txt
 
             # Validate it's a real PKGBUILD (prevents accidentally fetching HTML pages)
             if ! echo "$upstream_pkgbuild" | grep -q 'pkgver='; then
