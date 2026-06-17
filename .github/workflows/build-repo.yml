@@ -78,6 +78,20 @@ jobs:
           for pkg in ${{ matrix.package }}; do
             chown -R builder:builder "packages/$pkg"
           done
+      
+      - name: Import PGP keys
+        run: |
+          keys=$(sudo -u builder bash -c "
+            source packages/${{ matrix.package }}/PKGBUILD
+            echo \${validpgpkeys[@]}
+          ")
+          if [[ -n "$keys" ]]; then
+            for key in $keys; do
+              sudo -u builder gpg --keyserver keyserver.ubuntu.com --recv-keys "$key" || \
+              sudo -u builder gpg --keyserver hkps://keys.openpgp.org --recv-keys "$key" || \
+              sudo -u builder gpg --keyserver hkps://pgp.mit.edu --recv-keys "$key" || true
+            done
+          fi
 
       - name: Build package
         run: |
