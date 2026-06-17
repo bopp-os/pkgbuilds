@@ -25,12 +25,12 @@ jobs:
     outputs:
       packages: ${{ steps.detect.outputs.packages }}
     steps:
+      - name: Clean root-owned files from previous build
+        run: sudo rm -rf /opt/github-runner/_work/pkgbuilds/pkgbuilds/built-pkgs
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
-
-      - name: Clean root-owned files from previous build
-        run: sudo rm -rf /opt/github-runner/_work/pkgbuilds/pkgbuilds/built-pkgs
 
       - name: Detect changed packages
         id: detect
