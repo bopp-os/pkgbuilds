@@ -49,8 +49,21 @@ jobs:
               base="$(git hash-object -t tree /dev/null)"
             fi
 
-            changed=$(git diff --name-only "$base" HEAD -- 'packages/**/PKGBUILD' \
-              | sed 's|packages/\([^/]*\)/.*|\1|' | sort -u | jq -R . | jq -sc .)
+            changed_dirs=$(git diff --name-only "$base" HEAD -- 'packages/' \
+              | sed -n 's|^packages/\([^/]*\)/.*|\1|p' | sort -u)
+
+            changed_pkgs=()
+            for pkg in $changed_dirs; do
+              if [[ -f "packages/$pkg/PKGBUILD" ]]; then
+                changed_pkgs+=("$pkg")
+              fi
+            done
+
+            if [[ ${#changed_pkgs[@]} -eq 0 ]]; then
+              changed="[]"
+            else
+              changed=$(printf '%s\n' "${changed_pkgs[@]}" | jq -R . | jq -sc .)
+            fi
 
             echo "packages=$changed" >> "$GITHUB_OUTPUT"
           fi

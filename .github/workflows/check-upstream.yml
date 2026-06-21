@@ -31,6 +31,7 @@ jobs:
           updated_packages=()
 
           for pkg_dir in packages/*/; do
+            git checkout -f main
             pkg_name=$(basename "$pkg_dir")
 
             # Allow override via .upstream-name
@@ -72,27 +73,64 @@ jobs:
             echo "  Source Type: $source_type"
             echo "  Target URL : $upstream_url"
 
-            # Fetch upstream PKGBUILD
-            upstream_pkgbuild=$(curl -fsSL "$upstream_url" 2>curl_err.txt || true)
+            # Determine git URL if it's an AUR or Git repository
+            git_url=""
+            if [[ "$source_type" == "AUR" ]]; then
+              git_url="https://aur.archlinux.org/${upstream_name}.git"
+            elif [[ -f "$pkg_dir/.upstream-url" ]]; then
+              orig_upstream_url=$(cat "$pkg_dir/.upstream-url" | tr -d '[:space:]')
+              if [[ "$orig_upstream_url" =~ ^https://aur\.archlinux\.org/[^/]+\.git/?$ ]] || [[ "$orig_upstream_url" =~ ^https://github\.com/[^/]+/[^/]+/?$ ]] || [[ "$orig_upstream_url" =~ \.git$ ]]; then
+                git_url="$orig_upstream_url"
+              fi
+            fi
 
-            if [[ -z "$upstream_pkgbuild" ]]; then
-              echo "::warning::Could not fetch upstream PKGBUILD for $pkg_name"
-              echo "  Curl stderr:"
-              cat curl_err.txt | sed 's/^/    /'
+            has_changes=0
+            upstream_ver="unknown"
+
+            if [[ -n "$git_url" ]]; then
+              echo "  Cloning upstream Git repo: $git_url"
+              clone_dir=$(mktemp -d)
+              if git clone --depth 1 "$git_url" "$clone_dir" >/dev/null 2>&1; then
+                if [[ -f "$clone_dir/PKGBUILD" ]]; then
+                  # Compare PKGBUILD
+                  if ! diff "$clone_dir/PKGBUILD" "$local_pkgbuild" > /dev/null 2>&1; then
+                    has_changes=1
+                    upstream_ver=$(grep -m1 '^pkgver=' "$clone_dir/PKGBUILD" | cut -d= -f2 || echo "unknown")
+                  fi
+                else
+                  echo "::warning::No PKGBUILD found in cloned repo $git_url"
+                fi
+              else
+                echo "::warning::Failed to clone upstream Git repo $git_url"
+              fi
+            else
+              # Fetch upstream PKGBUILD via curl
+              upstream_pkgbuild=$(curl -fsSL "$upstream_url" 2>curl_err.txt || true)
+              if [[ -z "$upstream_pkgbuild" ]]; then
+                echo "::warning::Could not fetch upstream PKGBUILD for $pkg_name"
+                echo "  Curl stderr:"
+                cat curl_err.txt | sed 's/^/    /'
+                rm -f curl_err.txt
+                continue
+              fi
               rm -f curl_err.txt
-              continue
-            fi
-            rm -f curl_err.txt
 
-            # Validate it's a real PKGBUILD (prevents accidentally fetching HTML pages)
-            if ! echo "$upstream_pkgbuild" | grep -q 'pkgver='; then
-              echo "::warning::Fetched content for $upstream_name does not look like a valid PKGBUILD (missing pkgver=). Check .upstream-url to ensure it is a raw text link."
-              continue
+              # Validate it's a real PKGBUILD (prevents accidentally fetching HTML pages)
+              if ! echo "$upstream_pkgbuild" | grep -q 'pkgver='; then
+                echo "::warning::Fetched content for $upstream_name does not look like a valid PKGBUILD (missing pkgver=). Check .upstream-url to ensure it is a raw text link."
+                continue
+              fi
+
+              # Compare
+              if ! diff <(echo "$upstream_pkgbuild") "$local_pkgbuild" > /dev/null 2>&1; then
+                has_changes=1
+                upstream_ver=$(echo "$upstream_pkgbuild" | grep -m1 '^pkgver=' | cut -d= -f2 || echo "unknown")
+              fi
             fi
 
-            # Compare
-            if diff <(echo "$upstream_pkgbuild") "$local_pkgbuild" > /dev/null 2>&1; then
+            if [[ $has_changes -eq 0 ]]; then
               echo "  ✓ $pkg_name is up to date"
+              [[ -n "$git_url" && -d "${clone_dir:-}" ]] && rm -rf "$clone_dir"
               continue
             fi
 
@@ -105,23 +143,36 @@ jobs:
 
             git checkout -b "$branch"
 
-            # Write upstream PKGBUILD
-            echo "$upstream_pkgbuild" > "$local_pkgbuild"
-
-            # Extract upstream pkgver for commit message
-            upstream_ver=$(echo "$upstream_pkgbuild" | grep -m1 '^pkgver=' | cut -d= -f2 || echo "unknown")
-            local_ver=$(grep -m1 '^pkgver=' "$local_pkgbuild.orig" 2>/dev/null | cut -d= -f2 || echo "unknown")
+            # Apply changes
+            if [[ -n "$git_url" ]]; then
+              # Sync all files from clone_dir (except git meta and local metadata files starting with dot)
+              # Remove files in local dir that are no longer in clone_dir (except dotfiles)
+              for f in "$pkg_dir"*; do
+                if [[ -f "$f" ]]; then
+                  local_file_name=$(basename "$f")
+                  if [[ ! -f "$clone_dir/$local_file_name" ]]; then
+                    rm "$f"
+                  fi
+                fi
+              done
+              # Copy new/updated files
+              cp -r "$clone_dir"/* "$pkg_dir/"
+              rm -rf "$clone_dir"
+            else
+              # Write upstream PKGBUILD only
+              echo "$upstream_pkgbuild" > "$local_pkgbuild"
+            fi
 
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
 
-            git add "$local_pkgbuild"
+            git add "$pkg_dir"
             git commit -m "upstream($pkg_name): update to $upstream_ver"
 
             git push origin "$branch"
 
             # Build diff for PR body into a file to prevent "Argument list too long" (E2BIG)
-            diff <(git show HEAD~1:"$local_pkgbuild" 2>/dev/null || echo "") "$local_pkgbuild" > diff.txt || true
+            git diff HEAD~1 HEAD -- "$pkg_dir" > diff.txt || true
 
             export PKG_NAME="$pkg_name"
             
