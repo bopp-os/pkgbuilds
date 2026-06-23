@@ -28,6 +28,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Ensure the upstream-update label exists in the repository
+          gh label create "upstream-update" \
+            --color "1d76db" \
+            --description "Updates from upstream package sources" \
+            --repo "$REPO" || true
+
           updated_packages=()
 
           for pkg_dir in packages/*/; do
