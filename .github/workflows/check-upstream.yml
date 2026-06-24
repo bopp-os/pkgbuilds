@@ -46,6 +46,12 @@ jobs:
               upstream_name=$(cat "$pkg_dir/.upstream-name" | tr -d '[:space:]')
             fi
 
+            # Allow override via .upstream-path
+            upstream_path=""
+            if [[ -f "$pkg_dir/.upstream-path" ]]; then
+              upstream_path=$(cat "$pkg_dir/.upstream-path" | tr -d '[:space:]')
+            fi
+
             local_pkgbuild="$pkg_dir/PKGBUILD"
             if [[ ! -f "$local_pkgbuild" ]]; then
               echo "::warning::No PKGBUILD found for $pkg_name, skipping"
@@ -64,7 +70,11 @@ jobs:
               
               # Auto-convert GitHub repo URLs to point to the raw PKGBUILD on the default branch
               if [[ "$upstream_url" =~ ^https://github\.com/[^/]+/[^/]+/?$ ]]; then
-                upstream_url="${upstream_url%/}/raw/HEAD/PKGBUILD"
+                if [[ -n "$upstream_path" ]]; then
+                  upstream_url="${upstream_url%/}/raw/HEAD/${upstream_path}/PKGBUILD"
+                else
+                  upstream_url="${upstream_url%/}/raw/HEAD/PKGBUILD"
+                fi
               fi
 
               # Auto-convert AUR .git repository URLs to point to the raw cgit PKGBUILD
@@ -97,14 +107,19 @@ jobs:
               echo "  Cloning upstream Git repo: $git_url"
               clone_dir=$(mktemp -d)
               if git clone --depth 1 "$git_url" "$clone_dir" >/dev/null 2>&1; then
-                if [[ -f "$clone_dir/PKGBUILD" ]]; then
+                upstream_pkgbuild_path="$clone_dir/PKGBUILD"
+                if [[ -n "$upstream_path" ]]; then
+                  upstream_pkgbuild_path="$clone_dir/$upstream_path/PKGBUILD"
+                fi
+
+                if [[ -f "$upstream_pkgbuild_path" ]]; then
                   # Compare PKGBUILD
-                  if ! diff "$clone_dir/PKGBUILD" "$local_pkgbuild" > /dev/null 2>&1; then
+                  if ! diff "$upstream_pkgbuild_path" "$local_pkgbuild" > /dev/null 2>&1; then
                     has_changes=1
-                    upstream_ver=$(grep -m1 '^pkgver=' "$clone_dir/PKGBUILD" | cut -d= -f2 || echo "unknown")
+                    upstream_ver=$(grep -m1 '^pkgver=' "$upstream_pkgbuild_path" | cut -d= -f2 || echo "unknown")
                   fi
                 else
-                  echo "::warning::No PKGBUILD found in cloned repo $git_url"
+                  echo "::warning::No PKGBUILD found in cloned repo $git_url at path ${upstream_path:-PKGBUILD}"
                 fi
               else
                 echo "::warning::Failed to clone upstream Git repo $git_url"
@@ -151,18 +166,16 @@ jobs:
 
             # Apply changes
             if [[ -n "$git_url" ]]; then
-              # Sync all files from clone_dir (except git meta and local metadata files starting with dot)
-              # Remove files in local dir that are no longer in clone_dir (except dotfiles)
-              for f in "$pkg_dir"*; do
-                if [[ -f "$f" ]]; then
-                  local_file_name=$(basename "$f")
-                  if [[ ! -f "$clone_dir/$local_file_name" ]]; then
-                    rm "$f"
-                  fi
-                fi
-              done
+              sync_src_dir="$clone_dir"
+              if [[ -n "$upstream_path" ]]; then
+                sync_src_dir="$clone_dir/$upstream_path"
+              fi
+
+              # Remove all non-dot files/directories in packages/<pkg>
+              find "$pkg_dir" -mindepth 1 -maxdepth 1 ! -name ".*" -exec rm -rf {} +
+
               # Copy new/updated files
-              cp -r "$clone_dir"/* "$pkg_dir/"
+              cp -r "$sync_src_dir"/* "$pkg_dir/"
               rm -rf "$clone_dir"
             else
               # Write upstream PKGBUILD only

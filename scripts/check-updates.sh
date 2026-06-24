@@ -39,6 +39,11 @@ for pkg_name in "${targets[@]}"; do
     upstream_name=$(cat "$pkg_dir/.upstream-name" | tr -d '[:space:]')
   fi
 
+  upstream_path=""
+  if [[ -f "$pkg_dir/.upstream-path" ]]; then
+    upstream_path=$(cat "$pkg_dir/.upstream-path" | tr -d '[:space:]')
+  fi
+
   local_pkgbuild="$pkg_dir/PKGBUILD"
   if [[ ! -f "$local_pkgbuild" ]]; then
     echo -e "${YELLOW}⚠ No PKGBUILD for $pkg_name${RESET}"
@@ -57,7 +62,11 @@ for pkg_name in "${targets[@]}"; do
 
     # Auto-convert GitHub repo URLs to point to the raw PKGBUILD on the default branch
     if [[ "$upstream_url" =~ ^https://github\.com/[^/]+/[^/]+/?$ ]]; then
-      upstream_url="${upstream_url%/}/raw/HEAD/PKGBUILD"
+      if [[ -n "$upstream_path" ]]; then
+        upstream_url="${upstream_url%/}/raw/HEAD/${upstream_path}/PKGBUILD"
+      else
+        upstream_url="${upstream_url%/}/raw/HEAD/PKGBUILD"
+      fi
     fi
 
     # Auto-convert AUR .git repository URLs to point to the raw cgit PKGBUILD
