@@ -97,10 +97,13 @@ for pkg_name in "${targets[@]}"; do
     continue
   fi
 
-  if diff <(echo "$upstream_pkgbuild") "$local_pkgbuild" > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ up to date${RESET}"
+  local_ver=$(grep -m1 '^pkgver=' "$local_pkgbuild" | cut -d= -f2 | tr -d '\r" '\''')
+  upstream_ver=$(echo "$upstream_pkgbuild" | grep -m1 '^pkgver=' | cut -d= -f2 | tr -d '\r" '\''')
+
+  if [[ "$local_ver" == "$upstream_ver" ]]; then
+    echo -e "${GREEN}✓ up to date ($local_ver)${RESET}"
   else
-    echo -e "${RED}↑ DIFFERS from upstream${RESET}"
+    echo -e "${RED}↑ UPSTREAM VERSION UPDATE AVAILABLE (local: $local_ver / upstream: $upstream_ver)${RESET}"
     any_diff=1
     echo ""
     echo -e "${YELLOW}--- upstream ($source_type)  /  +++ local $pkg_name${RESET}"

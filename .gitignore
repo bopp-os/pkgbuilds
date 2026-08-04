@@ -1,0 +1,19 @@
+# Local package build directories & artifacts
+built-pkgs/
+new-pkgs/
+src/
+pkg/
+
+# Compiled package archives and signatures
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+*.db.tar.gz
+*.db.tar.gz.sig
+*.files.tar.gz
+*.files.tar.gz.sig
+
+# Temporary log & diff files
+curl_err.txt
+diff.txt
+pr_body.md
+pr_body_temp.md

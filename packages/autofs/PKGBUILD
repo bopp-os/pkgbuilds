@@ -9,15 +9,15 @@
 
 pkgname=autofs
 pkgver=5.1.9
-pkgrel=7
+pkgrel=8
 pkgdesc='A kernel-based automounter for Linux'
 arch=('x86_64')
 url='https://www.kernel.org/pub/linux/daemons/autofs/'
 license=('GPL-2.0-or-later')
-depends=('libxml2')
+depends=('libxml2' 'krb5' 'sssd' 'libldap' 'libnsl' 'kmod' 'libtirpc' 'systemd-libs')
 makedepends=('libldap' 'krb5' 'kmod' 'sssd' 'libnsl' 'rpcsvc-proto' 'systemd')
-optdepends=('krb5: for LDAP support'
-            'sssd: for SSSD integration')
+provides=("autofs=$pkgver")
+conflicts=('autofs')
 backup=('etc/autofs/auto.master'
         'etc/autofs/auto.misc'
         'etc/autofs/auto.net'

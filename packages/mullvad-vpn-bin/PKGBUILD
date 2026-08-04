@@ -7,7 +7,7 @@ pkgname=(
 )
 pkgbase=mullvad-vpn-bin
 pkgver=2026.3
-pkgrel=1
+pkgrel=2
 pkgdesc="The Mullvad VPN client app for desktop"
 arch=('x86_64' 'aarch64')
 url="https://www.mullvad.net"
@@ -39,8 +39,8 @@ package_mullvad-vpn-bin() {
   pkgdesc+=" (desktop application)"
   depends+=('mullvad-vpn-daemon-bin')
   optdepends=('libappindicator: tray icon')
-  provides=('mullvad-vpn')
-  conflicts=('mullvad-vpn')
+  provides=("mullvad-vpn=$pkgver" "mullvad-vpn-bin=$pkgver")
+  conflicts=('mullvad-vpn' 'mullvad-vpn-bin')
   install='mullvad-vpn.install'
 
   bsdtar -xvf data.tar.xz -C "$pkgdir/"
@@ -70,8 +70,8 @@ package_mullvad-vpn-daemon-bin() {
     'iputils'
     'libnftnl'
   )
-  provides=('mullvad-vpn-daemon')
-  conflicts=('mullvad-vpn-daemon')
+  provides=("mullvad-vpn-daemon=$pkgver" "mullvad-vpn-daemon-bin=$pkgver")
+  conflicts=('mullvad-vpn-daemon' 'mullvad-vpn-daemon-bin')
   install='mullvad-vpn-daemon.install'
 
   cd "MullvadVPN-$pkgver"

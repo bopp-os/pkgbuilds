@@ -4,7 +4,7 @@
 
 pkgname=antigravity-ide
 pkgver=2.1.1
-pkgrel=1
+pkgrel=2
 pkgdesc='An agentic development platform from Google, evolving the IDE into the agent-first era'
 arch=(aarch64 x86_64)
 url='https://antigravity.google/'
@@ -41,7 +41,8 @@ depends=(alsa-lib
          systemd-libs
          util-linux-libs
          webkit2gtk-4.1)
-conflicts=('antigravity<2.0')
+provides=("antigravity=$pkgver" "antigravity-ide=$pkgver")
+conflicts=('antigravity<2.0' 'antigravity-ide')
 options=(!strip !debug)
 install=$pkgname.install
 source=(antigravity-ide.sh

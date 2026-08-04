@@ -113,10 +113,10 @@ jobs:
                 fi
 
                 if [[ -f "$upstream_pkgbuild_path" ]]; then
-                  # Compare PKGBUILD
-                  if ! diff "$upstream_pkgbuild_path" "$local_pkgbuild" > /dev/null 2>&1; then
+                  local_ver=$(grep -m1 '^pkgver=' "$local_pkgbuild" | cut -d= -f2 | tr -d '\r" '\''')
+                  upstream_ver=$(grep -m1 '^pkgver=' "$upstream_pkgbuild_path" | cut -d= -f2 | tr -d '\r" '\''')
+                  if [[ "$local_ver" != "$upstream_ver" ]]; then
                     has_changes=1
-                    upstream_ver=$(grep -m1 '^pkgver=' "$upstream_pkgbuild_path" | cut -d= -f2 || echo "unknown")
                   fi
                 else
                   echo "::warning::No PKGBUILD found in cloned repo $git_url at path ${upstream_path:-PKGBUILD}"
@@ -142,10 +142,11 @@ jobs:
                 continue
               fi
 
-              # Compare
-              if ! diff <(echo "$upstream_pkgbuild") "$local_pkgbuild" > /dev/null 2>&1; then
+              # Compare version numbers (pkgver) so custom bopp-os dependencies/signatures are preserved
+              local_ver=$(grep -m1 '^pkgver=' "$local_pkgbuild" | cut -d= -f2 | tr -d '\r" '\''')
+              upstream_ver=$(echo "$upstream_pkgbuild" | grep -m1 '^pkgver=' | cut -d= -f2 | tr -d '\r" '\''')
+              if [[ "$local_ver" != "$upstream_ver" ]]; then
                 has_changes=1
-                upstream_ver=$(echo "$upstream_pkgbuild" | grep -m1 '^pkgver=' | cut -d= -f2 || echo "unknown")
               fi
             fi
 

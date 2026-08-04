@@ -95,7 +95,7 @@ jobs:
             chown -R builder:builder "packages/$pkg"
           done
       
-      - name: Import PGP keys
+      - name: Import PGP keys for sources
         run: |
           keys=$(sudo -u builder bash -c "
             source packages/${{ matrix.package }}/PKGBUILD
@@ -109,23 +109,40 @@ jobs:
             done
           fi
 
+      - name: Import GPG signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [[ -n "$GPG_PRIVATE_KEY" ]]; then
+            echo "$GPG_PRIVATE_KEY" | sudo -u builder gpg --batch --import
+            key_id=$(sudo -u builder gpg --list-secret-keys --with-colons | grep '^sec' | cut -d: -f5 | head -n1)
+            echo "GPG_KEY_ID=$key_id" >> "$GITHUB_ENV"
+            echo "Imported GPG repo signing key: $key_id"
+          else
+            echo "No GPG_PRIVATE_KEY secret configured; skipping package signing."
+          fi
+
       - name: Build package
         run: |
           mkdir -p "$GITHUB_WORKSPACE/built-pkgs"
           for pkg in ${{ matrix.package }}; do
             cd "$GITHUB_WORKSPACE/packages/$pkg"
-            sudo -u builder makepkg -s --noconfirm --noprogressbar
+            if [[ -n "${GPG_KEY_ID:-}" ]]; then
+              sudo -u builder makepkg -s --noconfirm --noprogressbar --sign --key "$GPG_KEY_ID"
+            else
+              sudo -u builder makepkg -s --noconfirm --noprogressbar
+            fi
             
-            # Verify we got a package
-            ls -la *.pkg.tar.zst
-            cp *.pkg.tar.zst "$GITHUB_WORKSPACE/built-pkgs/"
+            # Verify we got a package and signature (if signed)
+            ls -la *.pkg.tar.zst*
+            cp *.pkg.tar.zst* "$GITHUB_WORKSPACE/built-pkgs/"
           done
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: pkg-${{ matrix.package }}
-          path: built-pkgs/*.pkg.tar.zst
+          path: built-pkgs/*
           retention-days: 7
 
       - name: Clean build artifacts
@@ -146,9 +163,30 @@ jobs:
           path: new-pkgs
           merge-multiple: true
 
+      - name: Import GPG signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [[ -n "$GPG_PRIVATE_KEY" ]]; then
+            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+            key_id=$(gpg --list-secret-keys --with-colons | grep '^sec' | cut -d: -f5 | head -n1)
+            echo "GPG_KEY_ID=$key_id" >> "$GITHUB_ENV"
+            echo "Imported GPG repo signing key: $key_id"
+          fi
+
       - name: Update pacman repo database
         run: |
           REPO_DIR=/var/www/pacman-repo
-          cp new-pkgs/*.pkg.tar.zst "$REPO_DIR/"
+          cp -a new-pkgs/* "$REPO_DIR/"
           cd "$REPO_DIR"
-          repo-add bopp-os.db.tar.gz *.pkg.tar.zst
+
+          if [[ -n "${GPG_KEY_ID:-}" ]]; then
+            echo "Signing repository database with key: $GPG_KEY_ID"
+            repo-add --sign --key "$GPG_KEY_ID" bopp-os.db.tar.gz *.pkg.tar.zst
+            gpg --armor --export "$GPG_KEY_ID" > boppos.asc
+            gpg --export "$GPG_KEY_ID" > boppos.gpg
+            echo "Exported public key to $REPO_DIR/boppos.asc and $REPO_DIR/boppos.gpg"
+          else
+            echo "Updating repository database without signing..."
+            repo-add bopp-os.db.tar.gz *.pkg.tar.zst
+          fi

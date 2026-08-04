@@ -1,16 +1,15 @@
 # Maintainer: shinka <shinnkka1@gmail.com>
 pkgname=sddm-theme-noctalia-git
 pkgver=r24.05d3761
-pkgrel=2
+pkgrel=3
 pkgdesc="a theme designed to complement the Noctalia Shell experience."
 arch=('any')
 url="https://github.com/mda-dev/noctalia-sddm-theme"
 license=('MIT')
-depends=('sddm' 'qt5-declarative' 'qt5-quickcontrols2' 'qt5-graphicaleffects' 'qt5-svg' )
+depends=('sddm' 'qt5-declarative' 'qt5-quickcontrols2' 'qt5-graphicaleffects' 'qt5-svg' 'jq')
 makedepends=('git')
-optdepends=('jq: for the sync-shell-wallpaper.sh script')
-provides=("${pkgname%-git}")
-conflicts=("${pkgname%-git}")
+provides=("${pkgname%-git}=$pkgver" "$pkgname=$pkgver")
+conflicts=("${pkgname%-git}" "$pkgname")
 source=("git+$url.git")
 sha256sums=('SKIP')
 install="sddm-theme-noctalia.install"
