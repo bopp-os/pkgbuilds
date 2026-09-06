@@ -153,17 +153,32 @@ jobs:
             /opt/github-runner/_work/pkgbuilds/ 2>/dev/null || true
 
   publish-repo:
-    needs: build
+    needs: [detect-changes, build]
+    if: always() && !cancelled() && needs.detect-changes.outputs.packages != '[]'
     runs-on: [self-hosted, x86-64-v3]   # already on proxima-a, no SSH needed
     steps:
       - name: Download all built packages
         uses: actions/download-artifact@v8
+        continue-on-error: true
         with:
           pattern: pkg-*
           path: new-pkgs
           merge-multiple: true
 
+      - name: Check for packages to publish
+        id: check-pkgs
+        run: |
+          if [[ -d new-pkgs && -n "$(ls -A new-pkgs/*.pkg.tar.zst 2>/dev/null)" ]]; then
+            echo "has_packages=true" >> "$GITHUB_OUTPUT"
+            echo "Found packages to publish:"
+            ls -la new-pkgs/*.pkg.tar.zst
+          else
+            echo "has_packages=false" >> "$GITHUB_OUTPUT"
+            echo "No packages were built successfully to publish."
+          fi
+
       - name: Import GPG signing key
+        if: steps.check-pkgs.outputs.has_packages == 'true'
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
@@ -175,6 +190,7 @@ jobs:
           fi
 
       - name: Update pacman repo database
+        if: steps.check-pkgs.outputs.has_packages == 'true'
         run: |
           REPO_DIR=/var/www/pacman-repo
           cp -a new-pkgs/* "$REPO_DIR/"
@@ -190,3 +206,9 @@ jobs:
             echo "Updating repository database without signing..."
             repo-add bopp-os.db.tar.gz *.pkg.tar.zst
           fi
+
+      - name: Fail workflow if any build job failed
+        if: needs.build.result != 'success'
+        run: |
+          echo "::error::One or more package builds failed in the matrix."
+          exit 1
