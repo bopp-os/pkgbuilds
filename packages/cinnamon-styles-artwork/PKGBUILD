@@ -2,19 +2,18 @@
 
 pkgname=cinnamon-styles-artwork
 pkgver=1.0.0
-pkgrel=1
+pkgrel=2
 pkgdesc='Some theme and icon styles for Cinnamon. Based on mint-artwork'
 arch=('any')
 url="https://github.com/linuxmint/mint-artwork"
 license=('GPL3')
-depends=('bibata-cursor-theme'
-    'cinnamon'
-    'mint-l-icons'
-    'mint-l-theme'
+depends=('cinnamon'
+    'mint-themes'
     'mint-x-icons'
-    'mint-y-icons'
-    'mint-themes')
-optdepends=('lightdm-slick-greeter-mint-theme: Additional options')
+    'mint-y-icons')
+optdepends=('bibata-cursor-theme: Modern cursor theme defined in styles'
+            'lightdm-slick-greeter-mint-theme: Additional options')
+provides=("$pkgname=$pkgver")
 conflicts=(mint-artwork)
 source=("00_mint-x.styles"
         "00_mint-y.styles")
