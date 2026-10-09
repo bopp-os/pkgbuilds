@@ -194,17 +194,30 @@ jobs:
         run: |
           REPO_DIR=/var/www/pacman-repo
           cp -a new-pkgs/* "$REPO_DIR/"
+
+          # Only register the packages built in this run, in version order.
+          # Passing the whole repo dir lets lexical glob order (1.0.10 < 1.0.2)
+          # overwrite newer db entries with older versions.
+          mapfile -t new_pkgs < <(find new-pkgs -maxdepth 1 -name '*.pkg.tar.zst' -printf '%f\n' | sort -V)
+          echo "Registering packages:"
+          printf '  %s\n' "${new_pkgs[@]}"
+
           cd "$REPO_DIR"
 
+          sign_args=()
           if [[ -n "${GPG_KEY_ID:-}" ]]; then
             echo "Signing repository database with key: $GPG_KEY_ID"
-            repo-add --sign --key "$GPG_KEY_ID" bopp-os.db.tar.gz *.pkg.tar.zst
+            sign_args=(--sign --key "$GPG_KEY_ID")
+          else
+            echo "Updating repository database without signing..."
+          fi
+
+          repo-add --prevent-downgrade "${sign_args[@]}" bopp-os.db.tar.gz "${new_pkgs[@]}"
+
+          if [[ -n "${GPG_KEY_ID:-}" ]]; then
             gpg --armor --export "$GPG_KEY_ID" > boppos.asc
             gpg --export "$GPG_KEY_ID" > boppos.gpg
             echo "Exported public key to $REPO_DIR/boppos.asc and $REPO_DIR/boppos.gpg"
-          else
-            echo "Updating repository database without signing..."
-            repo-add bopp-os.db.tar.gz *.pkg.tar.zst
           fi
 
       - name: Fail workflow if any build job failed
