@@ -180,7 +180,9 @@ jobs:
 
   publish-repo:
     needs: [detect-changes, build]
-    if: always() && !cancelled() && needs.detect-changes.outputs.packages != '[]'
+    # Only main publishes. A push to any other branch (a PR branch) still builds the packages as a test, but nothing is
+    # copied to the live repository until the change is reviewed and merged.
+    if: always() && !cancelled() && github.ref == 'refs/heads/main' && needs.detect-changes.outputs.packages != '[]'
     runs-on: [self-hosted, x86-64-v3]   # already on proxima-a, no SSH needed
     steps:
       - name: Download all built packages
