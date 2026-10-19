@@ -83,6 +83,28 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Add the bopp-os repository
+        # Packages here can depend on each other (litterbox-sandbox-addons needs litterbox-sandbox), and `makepkg -s` only
+        # installs dependencies from the repositories pacman knows. Appended last so Arch and CachyOS packages keep priority.
+        # Best effort: if the key or the repository cannot be had, the job carries on exactly as before and only a package
+        # that really needs something from this repository fails.
+        run: |
+          # Fingerprint of the repository signing key (also pinned in bopp-os/cachyos scripts/setup_pacman_repos.sh).
+          want=3806768589376830FEA123D6CF30985CE903D47C
+          if grep -q '^\[bopp-os\]' /etc/pacman.conf; then echo "bopp-os repository already configured"; exit 0; fi
+          if ! curl -fsSL --max-time 30 https://repo.ripps.me/boppos.gpg -o /tmp/boppos.gpg; then
+            echo "::warning::could not download the bopp-os repository key; building without that repository"; exit 0
+          fi
+          fpr=$(gpg --with-colons --show-keys /tmp/boppos.gpg | awk -F: '/^fpr/ {print $10; exit}')
+          if [ "$fpr" != "$want" ]; then
+            echo "::warning::bopp-os repository key is $fpr, expected $want; building without that repository"; exit 0
+          fi
+          if ! pacman-key --add /tmp/boppos.gpg || ! pacman-key --lsign-key "$fpr"; then
+            echo "::warning::could not import the bopp-os repository key; building without that repository"; exit 0
+          fi
+          printf '\n[bopp-os]\nSigLevel = Optional TrustAll\nServer = https://repo.ripps.me\n' >> /etc/pacman.conf
+          echo "Added the bopp-os repository (key $fpr)"
+
       - name: Install build deps
         run: |
           pacman -Syu --noconfirm base-devel git
