@@ -36,7 +36,7 @@ jobs:
         id: detect
         run: |
           if [[ "${{ inputs.build_all }}" == "true" ]]; then
-            all_pkgs=$(git ls-files 'packages/**/PKGBUILD' \
+            all_pkgs=$(git ls-files 'packages/**/PKGBUILD' 'packages/**/.upstream-ref' \
               | sed 's|packages/\([^/]*\)/.*|\1|' | sort -u | jq -R . | jq -sc .)
             echo "packages=$all_pkgs" >> "$GITHUB_OUTPUT"
           elif [[ -n "${{ inputs.package }}" ]]; then
@@ -54,7 +54,7 @@ jobs:
 
             changed_pkgs=()
             for pkg in $changed_dirs; do
-              if [[ -f "packages/$pkg/PKGBUILD" ]]; then
+              if [[ -f "packages/$pkg/PKGBUILD" || -f "packages/$pkg/.upstream-ref" ]]; then
                 changed_pkgs+=("$pkg")
               fi
             done
@@ -86,6 +86,32 @@ jobs:
       - name: Install build deps
         run: |
           pacman -Syu --noconfirm base-devel git
+
+      - name: Fetch the files of link-only packages
+        run: |
+          # A package folder with only .upstream-url/.upstream-path/.upstream-ref has no PKGBUILD in this repo:
+          # its files live in another repo, at the release tag pinned in .upstream-ref (changed only by a reviewed PR).
+          set -euo pipefail
+          for pkg in ${{ matrix.package }}; do
+            dir="packages/$pkg"
+            if [[ -f "$dir/PKGBUILD" || ! -f "$dir/.upstream-ref" ]]; then continue; fi
+            url=$(tr -d '[:space:]' < "$dir/.upstream-url")
+            path=$(tr -d '[:space:]' < "$dir/.upstream-path")
+            ref=$(tr -d '[:space:]' < "$dir/.upstream-ref")
+            if [[ ! "$url" =~ ^https://github\.com/[^/]+/[^/]+/?$ || ! "$path" =~ ^[A-Za-z0-9_-]+$ || ! "$ref" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::$pkg: unusable .upstream-url, .upstream-path or .upstream-ref"
+              exit 1
+            fi
+            tmp=$(mktemp -d)
+            git clone --quiet --depth 1 --branch "$ref" "$url" "$tmp"
+            if [[ ! -f "$tmp/$path/PKGBUILD" ]]; then
+              echo "::error::$pkg: $url at $ref has no $path/PKGBUILD"
+              exit 1
+            fi
+            cp -r "$tmp/$path/." "$dir/"
+            rm -rf "$tmp"
+            echo "Fetched $pkg from $url at $ref"
+          done
 
       - name: Create build user (makepkg refuses root)
         run: |

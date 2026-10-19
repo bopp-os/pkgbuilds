@@ -52,6 +52,73 @@ jobs:
               upstream_path=$(cat "$pkg_dir/.upstream-path" | tr -d '[:space:]')
             fi
 
+            # Link-only package: no PKGBUILD in this repo. Its files live in another repo that declares releases as git
+            # tags named <path>-<version>-<release>; .upstream-ref pins the one we build. When a newer tag exists, open a
+            # PR that changes only .upstream-ref, so the release is reviewed here before anything is built or published.
+            if [[ ! -f "$pkg_dir/PKGBUILD" && -f "$pkg_dir/.upstream-url" && -n "$upstream_path" ]]; then
+              link_url=$(tr -d '[:space:]' < "$pkg_dir/.upstream-url")
+              if [[ ! "$link_url" =~ ^https://github\.com/[^/]+/[^/]+/?$ || ! "$upstream_path" =~ ^[A-Za-z0-9_-]+$ ]]; then
+                echo "::warning::$pkg_name: unusable .upstream-url or .upstream-path, skipping"
+                continue
+              fi
+              current_ref=""
+              if [[ -f "$pkg_dir/.upstream-ref" ]]; then
+                current_ref=$(tr -d '[:space:]' < "$pkg_dir/.upstream-ref")
+              fi
+              prefix="${upstream_path}-"
+              # The digit after the prefix keeps tags of a package whose name starts with this one from matching.
+              latest_ref=$(git ls-remote --tags --refs "$link_url" "refs/tags/${prefix}*" \
+                | sed 's|.*refs/tags/||' | grep -E "^${prefix}[0-9]+(\.[0-9]+)*-[0-9]+$" | sort -V | tail -n1 || true)
+              if [[ -z "$latest_ref" ]]; then
+                echo "::warning::$pkg_name: no release tag named ${prefix}<version>-<release> in $link_url"
+                continue
+              fi
+              if [[ "$latest_ref" == "$current_ref" ]]; then
+                echo "  ✓ $pkg_name is up to date ($current_ref)"
+                continue
+              fi
+              if [[ -n "$current_ref" && "$(printf '%s\n%s\n' "$current_ref" "$latest_ref" | sort -V | tail -n1)" != "$latest_ref" ]]; then
+                echo "::warning::$pkg_name: newest tag $latest_ref is older than the pinned $current_ref, not downgrading"
+                continue
+              fi
+              echo "  ↑ $pkg_name: ${current_ref:-<unpinned>} -> $latest_ref"
+              branch="upstream-update/${pkg_name}"
+              git push origin --delete "$branch" 2>/dev/null || true
+              git checkout -b "$branch"
+              printf '%s\n' "$latest_ref" > "$pkg_dir/.upstream-ref"
+
+              # What changed in that folder between the two releases, for the PR body (capped: PR bodies are limited)
+              clone_dir=$(mktemp -d)
+              git clone --quiet --filter=blob:none --no-checkout "$link_url" "$clone_dir"
+              if [[ -n "$current_ref" ]]; then
+                { git -C "$clone_dir" diff --stat "$current_ref" "$latest_ref" -- "$upstream_path"
+                  git -C "$clone_dir" diff "$current_ref" "$latest_ref" -- "$upstream_path"; } | head -c 50000 > diff.txt || true
+              else
+                git -C "$clone_dir" ls-tree -r --name-only "$latest_ref" -- "$upstream_path" > diff.txt || true
+              fi
+              rm -rf "$clone_dir"
+
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              git add "$pkg_dir/.upstream-ref"
+              git commit -m "upstream($pkg_name): update to $latest_ref"
+              git push origin "$branch"
+
+              export PKG_NAME="$pkg_name"
+              export SOURCE_INFO="**Upstream release tag:** \`$latest_ref\` (was \`${current_ref:-none}\`)"$'\n'"**Repository:** $link_url (folder \`$upstream_path\`)"
+              envsubst '${PKG_NAME} ${SOURCE_INFO}' < .github/upstream-pr-template.md > pr_body_temp.md
+              sed -e '/\${DIFF_OUTPUT}/ {' -e 'r diff.txt' -e 'd' -e '}' pr_body_temp.md > pr_body.md
+              gh pr create \
+                --repo "$REPO" \
+                --title "upstream($pkg_name): update to $latest_ref" \
+                --body-file pr_body.md \
+                --base main \
+                --head "$branch" \
+                --label "upstream-update" \
+                || echo "::warning::PR creation failed or already exists for $pkg_name"
+              continue
+            fi
+
             local_pkgbuild="$pkg_dir/PKGBUILD"
             if [[ ! -f "$local_pkgbuild" ]]; then
               echo "::warning::No PKGBUILD found for $pkg_name, skipping"
