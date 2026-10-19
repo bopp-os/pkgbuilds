@@ -170,21 +170,62 @@ jobs:
             echo "No GPG_PRIVATE_KEY secret configured; skipping package signing."
           fi
 
+      - name: Look for Rust packages (cargo cache)
+        id: cargo
+        env:
+          PKG: ${{ matrix.package }}
+        run: |
+          # A Rust package downloads and compiles hundreds of crates from scratch on every run (litterbox-sandbox: ~17 minutes),
+          # so its cargo state lives in the GitHub Actions cache. CARGO_HOME (crate downloads) is safe for any package.
+          # CARGO_TARGET_DIR moves the build output, so only a PKGBUILD that mentions it (and looks for its binaries there) opts in.
+          if grep -q cargo "packages/$PKG/PKGBUILD"; then
+            echo "use=true" >> "$GITHUB_OUTPUT"
+            echo "CARGO_HOME=$GITHUB_WORKSPACE/.cargo-cache/home" >> "$GITHUB_ENV"
+            if grep -q CARGO_TARGET_DIR "packages/$PKG/PKGBUILD"; then
+              echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/.cargo-cache/target" >> "$GITHUB_ENV"
+            fi
+          fi
+
+      - name: Restore the cargo cache
+        id: cargo-cache
+        if: steps.cargo.outputs.use == 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: .cargo-cache
+          key: cargo-${{ matrix.package }}-${{ hashFiles(format('packages/{0}/PKGBUILD', matrix.package), format('packages/{0}/.upstream-ref', matrix.package)) }}
+          restore-keys: cargo-${{ matrix.package }}-
+
+      - name: Prepare the cargo directories
+        if: steps.cargo.outputs.use == 'true'
+        run: |
+          mkdir -p .cargo-cache/home .cargo-cache/target
+          chown -R builder:builder .cargo-cache
+
       - name: Build package
         run: |
           mkdir -p "$GITHUB_WORKSPACE/built-pkgs"
           for pkg in ${{ matrix.package }}; do
             cd "$GITHUB_WORKSPACE/packages/$pkg"
+            # sudo drops the environment: keep the cargo directories chosen above
             if [[ -n "${GPG_KEY_ID:-}" ]]; then
-              sudo -u builder makepkg -s --noconfirm --noprogressbar --sign --key "$GPG_KEY_ID"
+              sudo -u builder --preserve-env=CARGO_HOME,CARGO_TARGET_DIR makepkg -s --noconfirm --noprogressbar --sign --key "$GPG_KEY_ID"
             else
-              sudo -u builder makepkg -s --noconfirm --noprogressbar
+              sudo -u builder --preserve-env=CARGO_HOME,CARGO_TARGET_DIR makepkg -s --noconfirm --noprogressbar
             fi
             
             # Verify we got a package and signature (if signed)
             ls -la *.pkg.tar.zst*
             cp *.pkg.tar.zst* "$GITHUB_WORKSPACE/built-pkgs/"
           done
+
+      # Saved only after a successful build, and not again when the exact key was already restored. A new version gets a new
+      # key, starts from the previous version's cache (restore-keys) and saves its own; GitHub evicts old entries by itself.
+      - name: Save the cargo cache
+        if: steps.cargo.outputs.use == 'true' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .cargo-cache
+          key: cargo-${{ matrix.package }}-${{ hashFiles(format('packages/{0}/PKGBUILD', matrix.package), format('packages/{0}/.upstream-ref', matrix.package)) }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -196,6 +237,8 @@ jobs:
       - name: Clean build artifacts
         if: always()
         run: |
+          # The cache lives on GitHub; do not leave a copy on the runner's disk
+          rm -rf "$GITHUB_WORKSPACE/.cargo-cache" || true
           # Fix ownership so the runner can clean up on next run
           chown -R $(stat -c %u /opt/github-runner/_work) \
             /opt/github-runner/_work/pkgbuilds/ 2>/dev/null || true
