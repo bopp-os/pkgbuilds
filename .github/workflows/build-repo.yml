@@ -282,22 +282,20 @@ jobs:
 
       - name: Scan with ClamAV
         id: clamscan
-        # The image ships with the current signature database; --pull always fetches the newest one. It runs as the
-        # runner's user (the image's own user cannot write GitHub's output files) with the workspace read-only, and
-        # writes its outputs to a folder that this step then hands to GitHub.
+        # The image ships with the current signature database; --pull always fetches the newest one. The runner's Docker
+        # remaps user ids, so the container cannot write any host file (not GitHub's output files, not a mounted folder):
+        # the workspace is mounted read-only, the script writes its outputs to /tmp inside the container, and they come
+        # back on stdout after a marker line while the scan log goes to stderr.
         run: |
           set -euo pipefail
-          results="$RUNNER_TEMP/clamscan"
-          rm -rf "$results" && mkdir -p "$results"
-          : > "$results/output"
-          : > "$results/summary"
-          docker run --rm --pull always --user "$(id -u):$(id -g)" \
-            -v "$GITHUB_WORKSPACE:/work:ro" -v "$results:/results" -w /work \
-            -e GITHUB_OUTPUT=/results/output -e GITHUB_STEP_SUMMARY=/results/summary \
-            --entrypoint /bin/sh clamav/clamav:stable scripts/clamscan-pkgs.sh scan-pkgs
-          cat "$results/output" >> "$GITHUB_OUTPUT"
-          cat "$results/summary" >> "$GITHUB_STEP_SUMMARY"
-          rm -rf "$results"
+          results="$RUNNER_TEMP/clamscan.txt"
+          docker run --rm --pull always -v "$GITHUB_WORKSPACE:/work:ro" -w /work \
+            -e GITHUB_OUTPUT=/tmp/output -e GITHUB_STEP_SUMMARY=/tmp/summary --entrypoint /bin/sh clamav/clamav:stable \
+            -c 'set -e; touch /tmp/output /tmp/summary; sh scripts/clamscan-pkgs.sh scan-pkgs >&2
+                echo "=== output"; cat /tmp/output; echo "=== summary"; cat /tmp/summary' > "$results"
+          sed -n '/^=== output$/,/^=== summary$/{/^===/d;p}' "$results" >> "$GITHUB_OUTPUT"
+          sed -n '/^=== summary$/,${/^===/d;p}' "$results" >> "$GITHUB_STEP_SUMMARY"
+          rm -f "$results"
 
       - name: Fail if anything was flagged
         if: steps.clamscan.outputs.flagged != '0'
