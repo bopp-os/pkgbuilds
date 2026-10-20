@@ -2,12 +2,12 @@
 # Scan built packages with ClamAV. Runs inside the clamav/clamav image (Alpine, no bash) from build-repo.yml.
 #
 # Usage: clamscan-pkgs.sh <dir>
-#   <dir> holds one folder per artifact (pkg-<name>/), each with its .pkg.tar.zst files and their unpacked contents.
+#   <dir> holds the downloaded .pkg.tar.zst files, each next to a <name>.unpacked/ folder with its contents.
 #
 # Writes to $GITHUB_OUTPUT:
-#   clean=<space-separated artifact folders with no findings>
-#   flagged=<number of folders with findings or scan errors>
-# Always exits 0 when it got as far as writing those outputs; the workflow decides what a finding means.
+#   clean=<space-separated package file names with no findings>
+#   flagged=<number of packages with findings or scan errors>
+# Exits 0 once it got as far as writing those outputs; the workflow decides what a finding means.
 
 set -u
 
@@ -18,14 +18,15 @@ summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 
 clamscan --version
 # shellcheck disable=SC2016 # the backticks are Markdown
-printf '## ClamAV scan\n\n`%s`\n\n| Artifact | Result |\n|---|---|\n' "$(clamscan --version)" >> "$summary"
+printf '## ClamAV scan\n\n`%s`\n\n| Package | Result |\n|---|---|\n' "$(clamscan --version)" >> "$summary"
 
-for pkgdir in "$dir"/pkg-*/; do
-  [ -d "$pkgdir" ] || continue
-  name=$(basename "$pkgdir")
+for pkg in "$dir"/*.pkg.tar.zst; do
+  [ -f "$pkg" ] || continue
+  name=$(basename "$pkg")
   # Oversized files count as findings (--alert-exceeds-max), so nothing slips through unscanned.
   out=$(clamscan --no-summary --infected --recursive --scan-archive=yes \
-    --max-filesize=2000M --max-scansize=4000M --alert-exceeds-max=yes "$pkgdir" 2>&1)
+    --max-filesize=2000M --max-scansize=4000M --alert-exceeds-max=yes \
+    "$pkg" "${pkg%.pkg.tar.zst}.unpacked" 2>&1)
   rc=$?
   case $rc in
     0)

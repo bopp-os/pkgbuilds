@@ -258,12 +258,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Merged, so the layout is the same flat folder whether one artifact or several match (download-artifact skips the
+      # per-artifact folder when there is only one).
       - name: Download all built packages
         uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           pattern: pkg-*
           path: scan-pkgs
+          merge-multiple: true
 
       - name: Unpack the packages
         # ClamAV does not reliably look inside zstd archives, so it scans the unpacked files next to each package.
@@ -271,7 +274,7 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           mkdir -p scan-pkgs
-          for pkg in scan-pkgs/pkg-*/*.pkg.tar.zst; do
+          for pkg in scan-pkgs/*.pkg.tar.zst; do
             out="${pkg%.pkg.tar.zst}.unpacked"
             mkdir -p "$out"
             bsdtar -xf "$pkg" -C "$out"
@@ -279,11 +282,22 @@ jobs:
 
       - name: Scan with ClamAV
         id: clamscan
-        # The image ships with the current signature database, and :stable is pulled again on every run.
-        uses: docker://clamav/clamav:stable
-        with:
-          entrypoint: /bin/sh
-          args: scripts/clamscan-pkgs.sh scan-pkgs
+        # The image ships with the current signature database; --pull always fetches the newest one. It runs as the
+        # runner's user (the image's own user cannot write GitHub's output files) with the workspace read-only, and
+        # writes its outputs to a folder that this step then hands to GitHub.
+        run: |
+          set -euo pipefail
+          results="$RUNNER_TEMP/clamscan"
+          rm -rf "$results" && mkdir -p "$results"
+          : > "$results/output"
+          : > "$results/summary"
+          docker run --rm --pull always --user "$(id -u):$(id -g)" \
+            -v "$GITHUB_WORKSPACE:/work:ro" -v "$results:/results" -w /work \
+            -e GITHUB_OUTPUT=/results/output -e GITHUB_STEP_SUMMARY=/results/summary \
+            --entrypoint /bin/sh clamav/clamav:stable scripts/clamscan-pkgs.sh scan-pkgs
+          cat "$results/output" >> "$GITHUB_OUTPUT"
+          cat "$results/summary" >> "$GITHUB_STEP_SUMMARY"
+          rm -rf "$results"
 
       - name: Fail if anything was flagged
         if: steps.clamscan.outputs.flagged != '0'
@@ -307,12 +321,18 @@ jobs:
     if: always() && !cancelled() && github.ref == 'refs/heads/main' && needs.detect-changes.outputs.packages != '[]'
     runs-on: [self-hosted, x86-64-v3]   # already on proxima-a, no SSH needed
     steps:
+      # This job has no checkout, so the workspace keeps files from earlier runs: start empty, or an old unscanned
+      # package could be published.
+      - name: Clear earlier downloads
+        run: rm -rf dl-pkgs new-pkgs
+
       - name: Download all built packages
         uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           pattern: pkg-*
           path: dl-pkgs
+          merge-multiple: true
 
       - name: Keep only packages the scan passed
         env:
@@ -322,8 +342,9 @@ jobs:
           set -euo pipefail
           mkdir -p new-pkgs
           for name in $CLEAN; do
-            if [[ "$name" =~ ^pkg-[A-Za-z0-9@._+-]+$ && -d "dl-pkgs/$name" ]]; then
-              cp -a "dl-pkgs/$name/." new-pkgs/
+            if [[ "$name" =~ ^[A-Za-z0-9@._+:-]+\.pkg\.tar\.zst$ && -f "dl-pkgs/$name" ]]; then
+              cp -a "dl-pkgs/$name" new-pkgs/
+              if [[ -f "dl-pkgs/$name.sig" ]]; then cp -a "dl-pkgs/$name.sig" new-pkgs/; fi
             fi
           done
           rm -rf dl-pkgs
