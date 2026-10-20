@@ -312,6 +312,12 @@ jobs:
           chmod -R u+rwX scan-pkgs 2>/dev/null || true
           rm -rf scan-pkgs
 
+      - name: Remove old ClamAV images
+        if: always()
+        # --pull always leaves the previous clamav/clamav:stable behind untagged after each database update. This removes
+        # untagged images only, so nothing another workload on the host still uses by tag is touched.
+        run: docker image prune -f
+
   publish-repo:
     needs: [detect-changes, build, scan]
     # Only main publishes. A push to any other branch (a PR branch) still builds the packages as a test, but nothing is
@@ -400,6 +406,17 @@ jobs:
             gpg --armor --export "$GPG_KEY_ID" > boppos.asc
             gpg --export "$GPG_KEY_ID" > boppos.gpg
             echo "Exported public key to $REPO_DIR/boppos.asc and $REPO_DIR/boppos.gpg"
+          fi
+
+      - name: Remove old package versions
+        if: steps.check-pkgs.outputs.has_packages == 'true'
+        # repo-add only updates the database; the old package files stay on disk. Keep the 5 newest versions of each
+        # package (with their .sig files) so an older one can still be installed by URL. Cleanup never fails the publish.
+        run: |
+          if command -v paccache > /dev/null; then
+            paccache -rk5 --nocolor -c /var/www/pacman-repo || echo "::warning::paccache failed; old package versions were not removed"
+          else
+            echo "::warning::paccache is not installed on the runner host (pacman-contrib); old package versions were not removed"
           fi
 
       - name: Fail workflow if any build job failed
