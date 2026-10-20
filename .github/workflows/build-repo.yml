@@ -239,9 +239,13 @@ jobs:
         run: |
           # The cache lives on GitHub; do not leave a copy on the runner's disk
           rm -rf "$GITHUB_WORKSPACE/.cargo-cache" || true
-          # Fix ownership so the runner can clean up on next run
-          chown -R $(stat -c %u /opt/github-runner/_work) \
-            /opt/github-runner/_work/pkgbuilds/ 2>/dev/null || true
+          # The packages are already uploaded as an artifact
+          rm -rf "$GITHUB_WORKSPACE/built-pkgs" || true
+          # This job runs as root in a container, where the runner's work folder is mounted at /__w, not at its host path
+          # /opt/github-runner/_work. Hand the workspace back to the runner's user (the owner of the folder above it), or
+          # the next host job's checkout (scan) cannot delete the files left here.
+          owner=$(stat -c %u:%g "$GITHUB_WORKSPACE/..")
+          chown -R "$owner" "$GITHUB_WORKSPACE" || true
 
   scan:
     needs: [detect-changes, build]
