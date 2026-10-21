@@ -8,7 +8,7 @@ url="https://github.com/bopp-os/boppos-tools"
 license=('GPL3')
 makedepends=('git' 'make')
 source=("${pkgbase}-${pkgver}.tar.gz::https://github.com/bopp-os/boppos-tools/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('817e1c713d98d79c2e9a48a50f466de477b7563378e0ee22d10fc47fec7145b3')
 
 build() {
   # Nothing to build, but required by makepkg

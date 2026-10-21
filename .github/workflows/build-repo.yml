@@ -15,9 +15,7 @@ on:
         default: false
 
 permissions:
-  contents: write
-  pages: write
-  id-token: write
+  contents: read
 
 jobs:
   detect-changes:
@@ -28,19 +26,27 @@ jobs:
       - name: Clean root-owned files from previous build
         run: sudo rm -rf /opt/github-runner/_work/pkgbuilds/pkgbuilds/built-pkgs
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+          persist-credentials: false
 
       - name: Detect changed packages
         id: detect
+        env:
+          BUILD_ALL: ${{ inputs.build_all }}
+          INPUT_PACKAGE: ${{ inputs.package }}
         run: |
-          if [[ "${{ inputs.build_all }}" == "true" ]]; then
+          if [[ "$BUILD_ALL" == "true" ]]; then
             all_pkgs=$(git ls-files 'packages/**/PKGBUILD' 'packages/**/.upstream-ref' \
               | sed 's|packages/\([^/]*\)/.*|\1|' | sort -u | jq -R . | jq -sc .)
             echo "packages=$all_pkgs" >> "$GITHUB_OUTPUT"
-          elif [[ -n "${{ inputs.package }}" ]]; then
-            echo "packages=[\"${{ inputs.package }}\"]" >> "$GITHUB_OUTPUT"
+          elif [[ -n "$INPUT_PACKAGE" ]]; then
+            if [[ ! "$INPUT_PACKAGE" =~ ^[A-Za-z0-9@._+-]+$ || ! -d "packages/$INPUT_PACKAGE" ]]; then
+              echo "::error::'$INPUT_PACKAGE' is not a package folder under packages/"
+              exit 1
+            fi
+            echo "packages=[\"$INPUT_PACKAGE\"]" >> "$GITHUB_OUTPUT"
           else
             # If only one commit exists, diff against empty tree
             if git rev-parse HEAD~1 &>/dev/null; then
@@ -81,28 +87,28 @@ jobs:
       fail-fast: false
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Add the bopp-os repository
         # Packages here can depend on each other (litterbox-sandbox-addons needs litterbox-sandbox), and `makepkg -s` only
         # installs dependencies from the repositories pacman knows. Appended last so Arch and CachyOS packages keep priority.
-        # Best effort: if the key or the repository cannot be had, the job carries on exactly as before and only a package
-        # that really needs something from this repository fails.
+        # The key comes from this checkout (keys/boppos.gpg), not from the network, and packages must be signed by it.
+        # Best effort: if the repository cannot be had, the job carries on exactly as before and only a package that really
+        # needs something from this repository fails.
         run: |
           # Fingerprint of the repository signing key (also pinned in bopp-os/cachyos scripts/setup_pacman_repos.sh).
           want=3806768589376830FEA123D6CF30985CE903D47C
           if grep -q '^\[bopp-os\]' /etc/pacman.conf; then echo "bopp-os repository already configured"; exit 0; fi
-          if ! curl -fsSL --max-time 30 https://repo.ripps.me/boppos.gpg -o /tmp/boppos.gpg; then
-            echo "::warning::could not download the bopp-os repository key; building without that repository"; exit 0
-          fi
-          fpr=$(gpg --with-colons --show-keys /tmp/boppos.gpg | awk -F: '/^fpr/ {print $10; exit}')
+          fpr=$(gpg --with-colons --show-keys keys/boppos.gpg | awk -F: '/^fpr/ {print $10; exit}')
           if [ "$fpr" != "$want" ]; then
             echo "::warning::bopp-os repository key is $fpr, expected $want; building without that repository"; exit 0
           fi
-          if ! pacman-key --add /tmp/boppos.gpg || ! pacman-key --lsign-key "$fpr"; then
+          if ! pacman-key --add keys/boppos.gpg || ! pacman-key --lsign-key "$fpr"; then
             echo "::warning::could not import the bopp-os repository key; building without that repository"; exit 0
           fi
-          printf '\n[bopp-os]\nSigLevel = Optional TrustAll\nServer = https://repo.ripps.me\n' >> /etc/pacman.conf
+          printf '\n[bopp-os]\nSigLevel = Required DatabaseOptional\nServer = https://repo.ripps.me\n' >> /etc/pacman.conf
           echo "Added the bopp-os repository (key $fpr)"
 
       - name: Install build deps
@@ -142,33 +148,35 @@ jobs:
           for pkg in ${{ matrix.package }}; do
             chown -R builder:builder "packages/$pkg"
           done
-      
-      - name: Import PGP keys for sources
-        run: |
-          keys=$(sudo -u builder bash -c "
-            source packages/${{ matrix.package }}/PKGBUILD
-            echo \${validpgpkeys[@]}
-          ")
-          if [[ -n "$keys" ]]; then
-            for key in $keys; do
-              sudo -u builder gpg --keyserver keyserver.ubuntu.com --recv-keys "$key" || \
-              sudo -u builder gpg --keyserver hkps://keys.openpgp.org --recv-keys "$key" || \
-              sudo -u builder gpg --keyserver hkps://pgp.mit.edu --recv-keys "$key" || true
-            done
-          fi
 
-      - name: Import GPG signing key
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      - name: Check the integrity of the package sources
+        # The PKGBUILD is sourced, which runs its top-level code: as the unprivileged builder, like makepkg itself.
         run: |
-          if [[ -n "$GPG_PRIVATE_KEY" ]]; then
-            echo "$GPG_PRIVATE_KEY" | sudo -u builder gpg --batch --import
-            key_id=$(sudo -u builder gpg --list-secret-keys --with-colons | grep '^sec' | cut -d: -f5 | head -n1)
-            echo "GPG_KEY_ID=$key_id" >> "$GITHUB_ENV"
-            echo "Imported GPG repo signing key: $key_id"
-          else
-            echo "No GPG_PRIVATE_KEY secret configured; skipping package signing."
-          fi
+          for pkg in ${{ matrix.package }}; do
+            sudo -u builder bash scripts/check-sources.sh "packages/$pkg"
+          done
+
+      - name: Import PGP keys for sources
+        # Upstream signing keys are committed in keys/pgp/<fingerprint>.asc and checked against that fingerprint here: no
+        # keyserver is involved, and a missing or mismatching key fails the build.
+        run: |
+          set -euo pipefail
+          for pkg in ${{ matrix.package }}; do
+            keys=$(sudo -u builder bash -c 'source "packages/$1/PKGBUILD"; echo "${validpgpkeys[@]}"' _ "$pkg")
+            for key in $keys; do
+              file="keys/pgp/$key.asc"
+              if [[ ! -f "$file" ]]; then
+                echo "::error::$pkg: validpgpkeys lists $key but $file is not in the repository"
+                exit 1
+              fi
+              have=$(gpg --with-colons --show-keys "$file" | awk -F: '/^fpr/ {print $10; exit}')
+              if [[ "$have" != "$key" ]]; then
+                echo "::error::$file holds key $have, not $key"
+                exit 1
+              fi
+              sudo -u builder gpg --batch --import "$file"
+            done
+          done
 
       - name: Look for Rust packages (cargo cache)
         id: cargo
@@ -189,7 +197,7 @@ jobs:
       - name: Restore the cargo cache
         id: cargo-cache
         if: steps.cargo.outputs.use == 'true'
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cargo-cache
           key: cargo-${{ matrix.package }}-${{ hashFiles(format('packages/{0}/PKGBUILD', matrix.package), format('packages/{0}/.upstream-ref', matrix.package)) }}
@@ -207,28 +215,25 @@ jobs:
           for pkg in ${{ matrix.package }}; do
             cd "$GITHUB_WORKSPACE/packages/$pkg"
             # sudo drops the environment: keep the cargo directories chosen above
-            if [[ -n "${GPG_KEY_ID:-}" ]]; then
-              sudo -u builder --preserve-env=CARGO_HOME,CARGO_TARGET_DIR makepkg -s --noconfirm --noprogressbar --sign --key "$GPG_KEY_ID"
-            else
-              sudo -u builder --preserve-env=CARGO_HOME,CARGO_TARGET_DIR makepkg -s --noconfirm --noprogressbar
-            fi
-            
-            # Verify we got a package and signature (if signed)
-            ls -la *.pkg.tar.zst*
-            cp *.pkg.tar.zst* "$GITHUB_WORKSPACE/built-pkgs/"
+            # Not signed here: the build job runs the PKGBUILD's code and never sees the signing key. The publish job signs
+            # the packages that passed the scan.
+            sudo -u builder --preserve-env=CARGO_HOME,CARGO_TARGET_DIR makepkg -s --noconfirm --noprogressbar
+
+            ls -la *.pkg.tar.zst
+            cp *.pkg.tar.zst "$GITHUB_WORKSPACE/built-pkgs/"
           done
 
       # Saved only after a successful build, and not again when the exact key was already restored. A new version gets a new
       # key, starts from the previous version's cache (restore-keys) and saves its own; GitHub evicts old entries by itself.
       - name: Save the cargo cache
         if: steps.cargo.outputs.use == 'true' && steps.cargo-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cargo-cache
           key: cargo-${{ matrix.package }}-${{ hashFiles(format('packages/{0}/PKGBUILD', matrix.package), format('packages/{0}/.upstream-ref', matrix.package)) }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pkg-${{ matrix.package }}
           path: built-pkgs/*
@@ -256,13 +261,14 @@ jobs:
     outputs:
       clean: ${{ steps.clamscan.outputs.clean }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Merged, so the layout is the same flat folder whether one artifact or several match (download-artifact skips the
       # per-artifact folder when there is only one).
       - name: Download all built packages
-        uses: actions/download-artifact@v8
-        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: pkg-*
           path: scan-pkgs
@@ -324,33 +330,53 @@ jobs:
     # copied to the live repository until the change is reviewed and merged.
     if: always() && !cancelled() && github.ref == 'refs/heads/main' && needs.detect-changes.outputs.packages != '[]'
     runs-on: [self-hosted, x86-64-v3]   # already on proxima-a, no SSH needed
+    # The signing key (GPG_PRIVATE_KEY) is a secret of this environment, which only deploys from main. The build jobs
+    # run PKGBUILD code and never see it; packages are signed here, after the scan.
+    environment: publish
+    env:
+      # The BoppOS repository signing key; also pinned in bopp-os/cachyos scripts/setup_pacman_repos.sh.
+      SIGNING_FPR: 3806768589376830FEA123D6CF30985CE903D47C
     steps:
-      # This job has no checkout, so the workspace keeps files from earlier runs: start empty, or an old unscanned
-      # package could be published.
+      # Only the public key and the scripts: nothing else of the repository is needed here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            keys
+            scripts
+          persist-credentials: false
+
+      # The workspace keeps files from earlier runs: start empty, or an old unscanned package could be published.
       - name: Clear earlier downloads
         run: rm -rf dl-pkgs new-pkgs
 
       - name: Download all built packages
-        uses: actions/download-artifact@v8
-        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: pkg-*
           path: dl-pkgs
           merge-multiple: true
 
       - name: Keep only packages the scan passed
+        id: keep
         env:
           CLEAN: ${{ needs.scan.outputs.clean }}
         run: |
           # Fails closed: if the scan job did not run or found nothing clean, CLEAN is empty and nothing is published.
+          # Signatures that came with the artifacts are never used: the packages are signed below.
           set -euo pipefail
           mkdir -p new-pkgs
-          for name in $CLEAN; do
-            if [[ "$name" =~ ^[A-Za-z0-9@._+:-]+\.pkg\.tar\.zst$ && -f "dl-pkgs/$name" ]]; then
-              cp -a "dl-pkgs/$name" new-pkgs/
-              if [[ -f "dl-pkgs/$name.sig" ]]; then cp -a "dl-pkgs/$name.sig" new-pkgs/; fi
+          rejected=0
+          shopt -s nullglob
+          for pkg in dl-pkgs/*.pkg.tar.zst; do
+            name=$(basename "$pkg")
+            if [[ " $CLEAN " == *" $name "* && "$name" =~ ^[A-Za-z0-9@._+:-]+\.pkg\.tar\.zst$ ]]; then
+              cp -a "$pkg" new-pkgs/
+            else
+              echo "::error::$name was not passed by the scan and will not be published"
+              rejected=$((rejected + 1))
             fi
           done
+          echo "rejected=$rejected" >> "$GITHUB_OUTPUT"
           rm -rf dl-pkgs
 
       - name: Check for packages to publish
@@ -366,20 +392,52 @@ jobs:
           fi
 
       - name: Import GPG signing key
-        if: steps.check-pkgs.outputs.has_packages == 'true'
+        # No condition: a missing or wrong key fails the run even when there is nothing to publish.
+        # A throwaway GNUPGHOME, so the key never lands in the runner user's own keyring on this shared host.
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
-          if [[ -n "$GPG_PRIVATE_KEY" ]]; then
-            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
-            key_id=$(gpg --list-secret-keys --with-colons | grep '^sec' | cut -d: -f5 | head -n1)
-            echo "GPG_KEY_ID=$key_id" >> "$GITHUB_ENV"
-            echo "Imported GPG repo signing key: $key_id"
+          set -euo pipefail
+          if [[ -z "$GPG_PRIVATE_KEY" ]]; then
+            echo "::error::GPG_PRIVATE_KEY is not available to this job; refusing to publish unsigned packages"
+            exit 1
           fi
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          rm -rf "$GNUPGHOME"
+          install -d -m 700 "$GNUPGHOME"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          # Primary fingerprints of all imported secret keys: exactly one, and it must be the repository key.
+          secret=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/ {p=1; next} /^ssb/ {p=0} /^fpr/ && p {print $10; p=0}')
+          if [[ "$secret" != "$SIGNING_FPR" ]]; then
+            echo "::error::the secret key is '$secret', expected exactly $SIGNING_FPR"
+            exit 1
+          fi
+          public=$(gpg --with-colons --show-keys keys/boppos.gpg | awk -F: '/^fpr/ {print $10; exit}')
+          if [[ "$public" != "$SIGNING_FPR" ]]; then
+            echo "::error::keys/boppos.gpg holds $public, expected $SIGNING_FPR"
+            exit 1
+          fi
+          echo "GPG_KEY_ID=$SIGNING_FPR" >> "$GITHUB_ENV"
+          echo "Imported the repository signing key $SIGNING_FPR"
+
+      - name: Sign the packages
+        if: steps.check-pkgs.outputs.has_packages == 'true'
+        run: |
+          set -euo pipefail
+          for pkg in new-pkgs/*.pkg.tar.zst; do
+            rm -f "$pkg.sig"
+            gpg --batch --yes --detach-sign --no-armor --local-user "$GPG_KEY_ID!" -o "$pkg.sig" "$pkg"
+          done
+
+      - name: Verify the package signatures
+        if: steps.check-pkgs.outputs.has_packages == 'true'
+        run: bash scripts/verify-pkg-sigs.sh keys/boppos.gpg new-pkgs/*.pkg.tar.zst
 
       - name: Update pacman repo database
         if: steps.check-pkgs.outputs.has_packages == 'true'
         run: |
+          set -euo pipefail
           REPO_DIR=/var/www/pacman-repo
           cp -a new-pkgs/* "$REPO_DIR/"
 
@@ -391,22 +449,15 @@ jobs:
           printf '  %s\n' "${new_pkgs[@]}"
 
           cd "$REPO_DIR"
+          echo "Signing repository database with key: $GPG_KEY_ID"
+          repo-add --prevent-downgrade --sign --key "$GPG_KEY_ID" bopp-os.db.tar.gz "${new_pkgs[@]}"
 
-          sign_args=()
-          if [[ -n "${GPG_KEY_ID:-}" ]]; then
-            echo "Signing repository database with key: $GPG_KEY_ID"
-            sign_args=(--sign --key "$GPG_KEY_ID")
-          else
-            echo "Updating repository database without signing..."
-          fi
+          # The public key served to users is the verified one from this repository.
+          cp "$GITHUB_WORKSPACE/keys/boppos.asc" "$GITHUB_WORKSPACE/keys/boppos.gpg" "$REPO_DIR/"
 
-          repo-add --prevent-downgrade "${sign_args[@]}" bopp-os.db.tar.gz "${new_pkgs[@]}"
-
-          if [[ -n "${GPG_KEY_ID:-}" ]]; then
-            gpg --armor --export "$GPG_KEY_ID" > boppos.asc
-            gpg --export "$GPG_KEY_ID" > boppos.gpg
-            echo "Exported public key to $REPO_DIR/boppos.asc and $REPO_DIR/boppos.gpg"
-          fi
+      - name: Verify the repository database signatures
+        if: steps.check-pkgs.outputs.has_packages == 'true'
+        run: bash scripts/verify-pkg-sigs.sh keys/boppos.gpg /var/www/pacman-repo/bopp-os.db.tar.gz /var/www/pacman-repo/bopp-os.files.tar.gz
 
       - name: Remove old package versions
         if: steps.check-pkgs.outputs.has_packages == 'true'
@@ -419,6 +470,12 @@ jobs:
             echo "::warning::paccache is not installed on the runner host (pacman-contrib); old package versions were not removed"
           fi
 
+      - name: Remove the signing key from the runner
+        if: always()
+        run: |
+          gpgconf --kill gpg-agent 2>/dev/null || GNUPGHOME="$RUNNER_TEMP/gnupg" gpgconf --kill gpg-agent 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/gnupg"
+
       - name: Fail workflow if any build job failed
         if: needs.build.result != 'success'
         run: |
@@ -426,7 +483,7 @@ jobs:
           exit 1
 
       - name: Fail workflow if the scan flagged or skipped anything
-        if: needs.scan.result != 'success'
+        if: needs.scan.result != 'success' || steps.keep.outputs.rejected != '0'
         run: |
           echo "::error::The ClamAV scan flagged a package or did not finish; flagged packages were not published."
           exit 1

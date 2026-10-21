@@ -10,7 +10,7 @@ depends=('sddm' 'qt5-declarative' 'qt5-quickcontrols2' 'qt5-graphicaleffects' 'q
 makedepends=('git')
 provides=("${pkgname%-git}=$pkgver" "$pkgname=$pkgver")
 conflicts=("${pkgname%-git}" "$pkgname")
-source=("git+$url.git")
+source=("git+$url.git#commit=05d3761ec0a85563466aef320d1f1cf2b3660f6d")
 sha256sums=('SKIP')
 install="sddm-theme-noctalia.install"
 
