@@ -28,7 +28,7 @@ optdepends=(
 )
 provides=("$_pkgname=$pkgver" "$pkgname=$pkgver")
 conflicts=("$_pkgname" "$pkgname")
-source=("$_pkgname::git+https://github.com/OpenGamingCollective/ScopeBuddy.git")
+source=("$_pkgname::git+https://github.com/OpenGamingCollective/ScopeBuddy.git#commit=5b64e1747f268a1b35a5a5d8dfd377799036365b")
 b2sums=('SKIP')
 pkgver() {
     cd $_pkgname
