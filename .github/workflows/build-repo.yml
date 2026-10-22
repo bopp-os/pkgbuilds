@@ -463,12 +463,7 @@ jobs:
         if: steps.check-pkgs.outputs.has_packages == 'true'
         # repo-add only updates the database; the old package files stay on disk. Keep the 5 newest versions of each
         # package (with their .sig files) so an older one can still be installed by URL. Cleanup never fails the publish.
-        run: |
-          if command -v paccache > /dev/null; then
-            paccache -rk5 --nocolor -c /var/www/pacman-repo || echo "::warning::paccache failed; old package versions were not removed"
-          else
-            echo "::warning::paccache is not installed on the runner host (pacman-contrib); old package versions were not removed"
-          fi
+        run: bash scripts/prune-old-pkgs.sh /var/www/pacman-repo 5 || echo "::warning::pruning failed; old package versions were not removed"
 
       - name: Remove the signing key from the runner
         if: always()
