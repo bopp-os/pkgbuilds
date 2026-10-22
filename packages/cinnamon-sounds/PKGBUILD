@@ -14,7 +14,7 @@ optdepends=('cinnamon')
 provides=("$pkgname=$pkgver")
 conflicts=('mint-artwork' 'mint-sounds' 'cinnamon-sound-effects' 'mint-artwork-cinnamon')
 install="${pkgname}.install"
-source=("http://packages.linuxmint.com/pool/main/m/mint-artwork/mint-artwork_${pkgver}.tar.xz"
+source=("https://mirror.csclub.uwaterloo.ca/linuxmint-packages/pool/main/m/mint-artwork/mint-artwork_${pkgver}.tar.xz"
         "cinnamon-sounds.install")
 
 sha256sums=('ce6569cbb4f5032544e67c03d1a67fffd90814ad88623977ad2abef5b7073c31'
