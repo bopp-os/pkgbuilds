@@ -1,0 +1,43 @@
+name: Check package sources
+
+# Runs on pull requests so a bad checksum (for example a SKIP) fails here, before the package is merged and built.
+# GitHub-hosted runner, read-only token, no secrets: check-sources.sh sources the PKGBUILD, which runs its top-level
+# code, so it must not run on the self-hosted build machine for a pull request.
+on:
+  pull_request:
+    paths:
+      - 'packages/**'
+      - 'scripts/check-sources.sh'
+      - 'scripts/pin-release-checksums.sh'
+      - 'scripts/test-pin-release-checksums.sh'
+      - '.github/workflows/check-sources.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  sources:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Test the checksum pinning script
+        run: bash scripts/test-pin-release-checksums.sh
+
+      - name: Check the sources of the packages this pull request changes
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          dirs=()
+          for pkg in $(git diff --name-only "origin/${BASE_REF}...HEAD" -- packages | cut -d/ -f2 | sort -u); do
+            # a link-only package has no PKGBUILD here: its files are fetched at build time
+            if [[ -f "packages/$pkg/PKGBUILD" ]]; then dirs+=("packages/$pkg"); fi
+          done
+          if [[ ${#dirs[@]} -eq 0 ]]; then
+            echo "No package with a PKGBUILD changed."
+            exit 0
+          fi
+          bash scripts/check-sources.sh "${dirs[@]}"
