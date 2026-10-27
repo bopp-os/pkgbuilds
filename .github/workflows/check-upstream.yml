@@ -250,6 +250,17 @@ jobs:
               echo "$upstream_pkgbuild" > "$local_pkgbuild"
             fi
 
+            # A package built from our own release asset has no hash upstream (the asset is built after the PKGBUILD is
+            # committed): pin the sha256 GitHub records for it. Asset not published yet: no PR now, try again next run.
+            pin_rc=0
+            bash scripts/pin-release-checksums.sh "$pkg_dir" || pin_rc=$?
+            if [[ $pin_rc -ne 0 ]]; then
+              echo "::warning::$pkg_name: could not pin the release checksum (exit $pin_rc); no PR this run"
+              git checkout -q -f main
+              git branch -q -D "$branch"
+              continue
+            fi
+
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
 
