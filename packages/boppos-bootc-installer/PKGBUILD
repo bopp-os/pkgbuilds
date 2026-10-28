@@ -30,7 +30,7 @@ prepare() {
 build() {
   # Arch Go packaging flags; meson's go build inherits them (it only sets GOPATH, GOCACHE and GOPROXY=off).
   export CGO_CPPFLAGS="${CPPFLAGS}" CGO_CFLAGS="${CFLAGS}" CGO_CXXFLAGS="${CXXFLAGS}" CGO_LDFLAGS="${LDFLAGS}"
-  export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+  export GOFLAGS="-buildmode=pie -trimpath -ldflags=-linkmode=external -mod=readonly -modcacherw"
   arch-meson "bootc-installer-${_commit}" build -Dbuild-fisherman=true
   meson compile -C build
 }
@@ -46,6 +46,7 @@ check() {
 
 package_boppos-bootc-installer() {
   pkgdesc="BoppOS fork of bootc-installer, a GTK4/libadwaita installer for bootc images"
+  arch=('any')  # Python only; fisherman, the compiled part, is its own package
   depends=('boppos-fisherman' 'python' 'python-gobject' 'python-requests' 'gtk4' 'libadwaita' 'gnome-desktop-4'
            'libgweather-4' 'libnm' 'gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'polkit' 'hicolor-icon-theme')
   optdepends=('python-segno: QR code on the phone companion page')
