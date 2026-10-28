@@ -5,10 +5,10 @@
 pkgbase=boppos-bootc-installer
 pkgname=('boppos-bootc-installer' 'boppos-fisherman')
 pkgver=3.0.0
-pkgrel=1
+pkgrel=2
 # Pinned commits on the boppos branches. _fishcommit must match the fisherman submodule pin in bootc-installer.
-_commit=8c8051eb7a2846e8eb16b54e2206286daff06654
-_fishcommit=dd24e6d8c9d18a085eb8a11f8372812cd11887b6
+_commit=efe58f3fb0425e59ca505771017edb85ab71e038
+_fishcommit=fa556ba80eafb8bd10b405fb5385ae594011ba8a
 arch=('x86_64')
 url="https://github.com/bopp-os/bootc-installer"
 license=('GPL-3.0-only')
@@ -18,8 +18,8 @@ checkdepends=('python-pytest')
 # GitHub archives leave submodules empty, so fisherman comes as its own tarball.
 source=("bootc-installer-${_commit}.tar.gz::https://github.com/bopp-os/bootc-installer/archive/${_commit}.tar.gz"
         "fisherman-${_fishcommit}.tar.gz::https://github.com/bopp-os/fisherman/archive/${_fishcommit}.tar.gz")
-sha256sums=('d27f92914a0c32160b438c0fbb31a98ec3ae76da0754a9a5e72e55e5c6e368c8'
-            '685a7a255577d67b9d70932780c21f09ffe24ed2a22907eb1853b93a25e829df')
+sha256sums=('fedc7cc8f8c5f8e7e8f49690a3f4c3b29a5ddb8b1ddf282aa6aeb912f6e7b7d9'
+            '5fc829b24442c64910e9ebfcbc97445a9c0631402be5d5d341e4bfbf7ba2aa77')
 
 prepare() {
   cd "bootc-installer-${_commit}"
@@ -38,10 +38,10 @@ build() {
 check() {
   cd "bootc-installer-${_commit}/fisherman/fisherman"
   # The packages carrying BoppOS changes; the rest of fisherman's suite expects its own CI environment.
-  go test ./internal/recipe/ ./internal/post/
+  go test ./internal/recipe/ ./internal/post/ ./internal/probe/
   go test -run 'TestSkopeoExportOCI|TestBuildBootcArgs' ./internal/install/
   cd "${srcdir}/bootc-installer-${_commit}"
-  python -m pytest -q -p no:cacheprovider tests/unit/test_fisherman_runner.py
+  python -m pytest -q -p no:cacheprovider tests/unit/test_fisherman_runner.py tests/unit/test_processor.py
 }
 
 package_boppos-bootc-installer() {
