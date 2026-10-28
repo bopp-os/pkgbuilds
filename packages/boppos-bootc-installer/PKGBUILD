@@ -1,0 +1,79 @@
+# Maintainer: BoppOS Team
+# BoppOS forks of tuna-os/bootc-installer and tuna-os/fisherman. The names carry a boppos- prefix so a same-named
+# package in another repository can never replace these on upgrade (pacman takes a package from the first repository
+# that has its name, whatever the version). The binaries keep their upstream names.
+pkgbase=boppos-bootc-installer
+pkgname=('boppos-bootc-installer' 'boppos-fisherman')
+pkgver=3.0.0
+pkgrel=1
+# Pinned commits on the boppos branches. _fishcommit must match the fisherman submodule pin in bootc-installer.
+_commit=8c8051eb7a2846e8eb16b54e2206286daff06654
+_fishcommit=dd24e6d8c9d18a085eb8a11f8372812cd11887b6
+arch=('x86_64')
+url="https://github.com/bopp-os/bootc-installer"
+license=('GPL-3.0-only')
+# gtk4 and libadwaita: blueprint-compiler loads their typelibs to compile the .blp UI files.
+makedepends=('meson' 'go' 'blueprint-compiler' 'glib2-devel' 'gettext' 'python' 'gtk4' 'libadwaita')
+checkdepends=('python-pytest')
+# GitHub archives leave submodules empty, so fisherman comes as its own tarball.
+source=("bootc-installer-${_commit}.tar.gz::https://github.com/bopp-os/bootc-installer/archive/${_commit}.tar.gz"
+        "fisherman-${_fishcommit}.tar.gz::https://github.com/bopp-os/fisherman/archive/${_fishcommit}.tar.gz")
+sha256sums=('d27f92914a0c32160b438c0fbb31a98ec3ae76da0754a9a5e72e55e5c6e368c8'
+            '685a7a255577d67b9d70932780c21f09ffe24ed2a22907eb1853b93a25e829df')
+
+prepare() {
+  cd "bootc-installer-${_commit}"
+  rmdir fisherman
+  mv "${srcdir}/fisherman-${_fishcommit}" fisherman
+}
+
+build() {
+  # Arch Go packaging flags; meson's go build inherits them (it only sets GOPATH, GOCACHE and GOPROXY=off).
+  export CGO_CPPFLAGS="${CPPFLAGS}" CGO_CFLAGS="${CFLAGS}" CGO_CXXFLAGS="${CXXFLAGS}" CGO_LDFLAGS="${LDFLAGS}"
+  export GOFLAGS="-buildmode=pie -trimpath -ldflags=-linkmode=external -mod=readonly -modcacherw"
+  arch-meson "bootc-installer-${_commit}" build -Dbuild-fisherman=true
+  meson compile -C build
+}
+
+check() {
+  cd "bootc-installer-${_commit}/fisherman/fisherman"
+  # The packages carrying BoppOS changes; the rest of fisherman's suite expects its own CI environment.
+  go test ./internal/recipe/ ./internal/post/
+  go test -run 'TestSkopeoExportOCI|TestBuildBootcArgs' ./internal/install/
+  cd "${srcdir}/bootc-installer-${_commit}"
+  python -m pytest -q -p no:cacheprovider tests/unit/test_fisherman_runner.py
+}
+
+package_boppos-bootc-installer() {
+  pkgdesc="BoppOS fork of bootc-installer, a GTK4/libadwaita installer for bootc images"
+  arch=('any')  # Python only; fisherman, the compiled part, is its own package
+  depends=('boppos-fisherman' 'python' 'python-gobject' 'python-requests' 'gtk4' 'libadwaita' 'gnome-desktop-4'
+           'libgweather-4' 'libnm' 'gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'polkit' 'hicolor-icon-theme')
+  optdepends=('python-segno: QR code on the phone companion page')
+  provides=('bootc-installer')
+  conflicts=('bootc-installer')
+
+  meson install -C build --destdir "${pkgdir}" --no-rebuild
+  # fisherman ships in its own package.
+  rm "${pkgdir}/usr/bin/fisherman"
+  install -Dm644 "bootc-installer-${_commit}/LICENSE.txt" "${pkgdir}/usr/share/licenses/boppos-bootc-installer/LICENSE"
+}
+
+package_boppos-fisherman() {
+  pkgdesc="BoppOS fork of fisherman, the backend that partitions a disk and runs bootc install"
+  depends=('podman' 'skopeo' 'util-linux' 'parted' 'dosfstools' 'btrfs-progs' 'e2fsprogs' 'cryptsetup'
+           'device-mapper' 'psmisc' 'openssl' 'shadow' 'tar' 'systemd')
+  optdepends=('bootc: install without a container (live media with an embedded image)'
+              'efibootmgr: report the new EFI boot entry to the installer'
+              'lvm2: deactivate LVM volume groups on the target disk'
+              'xfsprogs: XFS root filesystem'
+              'zfs-utils: ZFS root filesystem'
+              'flatpak: copy Flatpaks into the installed system'
+              'udisks2: release disks held by udisks'
+              'pipewire: friendly audio device names')
+  provides=('fisherman')
+  conflicts=('fisherman')
+
+  install -Dm755 build/fisherman/fisherman "${pkgdir}/usr/bin/fisherman"
+  install -Dm644 "bootc-installer-${_commit}/fisherman/LICENSE" "${pkgdir}/usr/share/licenses/boppos-fisherman/LICENSE"
+}
