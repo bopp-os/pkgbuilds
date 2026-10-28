@@ -12,7 +12,8 @@ _fishcommit=dd24e6d8c9d18a085eb8a11f8372812cd11887b6
 arch=('x86_64')
 url="https://github.com/bopp-os/bootc-installer"
 license=('GPL-3.0-only')
-makedepends=('meson' 'go' 'blueprint-compiler' 'glib2-devel' 'gettext' 'python')
+# gtk4 and libadwaita: blueprint-compiler loads their typelibs to compile the .blp UI files.
+makedepends=('meson' 'go' 'blueprint-compiler' 'glib2-devel' 'gettext' 'python' 'gtk4' 'libadwaita')
 checkdepends=('python-pytest')
 # GitHub archives leave submodules empty, so fisherman comes as its own tarball.
 source=("bootc-installer-${_commit}.tar.gz::https://github.com/bopp-os/bootc-installer/archive/${_commit}.tar.gz"
