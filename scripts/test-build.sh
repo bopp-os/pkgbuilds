@@ -16,6 +16,7 @@ image="${BUILD_IMAGE:-docker.io/cachyos/cachyos-v3:latest}"
 
 bash "$repo/scripts/check-sources.sh" "$dir"
 mkdir -p "$out"
+rm -f "$out"/*.pkg.tar.zst  # results of an earlier run would look like this run's output
 podman run --rm -v "$dir:/src:ro" -v "$out:/out" "$image" bash -euo pipefail -c '
   pacman -Syu --noconfirm --needed base-devel git >/dev/null
   useradd -m builder
