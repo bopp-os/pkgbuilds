@@ -1,7 +1,7 @@
 # Maintainer: BoppOS Team
 pkgbase=boppos-tools
 pkgname=('boppos-tools' 'boppos-artwork' 'boppos-boot-theme')
-pkgver=1.3.0
+pkgver=1.3.1
 pkgrel=1
 arch=('any')
 url="https://github.com/bopp-os/boppos-tools"
@@ -9,7 +9,7 @@ license=('GPL3')
 makedepends=('git' 'make')
 # The archive attached to the GitHub release by .github/workflows/release.yml (GitHub records its sha256 digest).
 source=("${pkgbase}-${pkgver}.tar.gz::https://github.com/bopp-os/boppos-tools/releases/download/v${pkgver}/${pkgbase}-${pkgver}.tar.gz")
-sha256sums=('ef9c19511f2601105d2dcd7ea5b785c0a3fb55aa3e02996d2f235a765a6b786a')
+sha256sums=('349491d47bc4ea36656e4a5a72169e1e4b43aba988633add83c3ca108a708b35')
 
 build() {
   # Nothing to build, but required by makepkg
