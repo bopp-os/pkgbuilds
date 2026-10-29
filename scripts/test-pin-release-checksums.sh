@@ -40,4 +40,6 @@ pkg h 1.0.0 'source=("a.tar.gz::https://github.com/bopp-os/demo/releases/downloa
 run h; expect "several sources untouched" $? 0 h "SKIP' 'SKIP"
 pkg i 1.0.0 'source=("https://github.com/bopp-os/demo/releases/download/v$pkgrel/x.tar.gz")' "sha256sums=('SKIP')"
 run i; expect "unknown variables untouched" $? 0 i "SKIP"
+mkdir -p "$tmp/j"; printf 'pkgname=demo\npkgver=1.0.0\nsource=("https://example.com/x.tar.gz")\nsha256sums=(SKIP)\n' > "$tmp/j/PKGBUILD"
+run j; expect "no pkgbase= line: rc 0, untouched" $? 0 j "SKIP"
 exit $fails

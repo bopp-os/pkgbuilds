@@ -18,8 +18,9 @@ pkgbuild="$dir/PKGBUILD"
 [[ -f "$pkgbuild" ]] || { echo "pin-release-checksums: no PKGBUILD in $dir" >&2; exit 1; }
 gh_cmd=${GH:-gh}
 
-pkgver=$(grep -m1 -E '^pkgver=' "$pkgbuild" | cut -d= -f2 | tr -d "\r\"' ")
-pkgbase=$(grep -m1 -E '^pkgbase=' "$pkgbuild" | cut -d= -f2 | tr -d "\r\"' ")
+# || true: a missing line must not trip set -e/pipefail (most AUR PKGBUILDs have no pkgbase=)
+pkgver=$(grep -m1 -E '^pkgver=' "$pkgbuild" | cut -d= -f2 | tr -d "\r\"' " || true)
+pkgbase=$(grep -m1 -E '^pkgbase=' "$pkgbuild" | cut -d= -f2 | tr -d "\r\"' " || true)
 
 source_line=$(grep -E '^source=\(' "$pkgbuild" || true)
 [[ $(printf '%s\n' "$source_line" | grep -c .) -eq 1 ]] || exit 0                # none, or defined more than once
