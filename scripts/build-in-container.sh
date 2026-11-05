@@ -56,7 +56,18 @@ else
 fi
 home=$(getent passwd "$builder" | cut -d: -f6)
 install -d -o "$builder" "$home"
+mkdir -p "$out"
 as_builder() { runuser -u "$builder" -- env HOME="$home" "$@"; }
+
+# Fail early and say why if the build user cannot write where makepkg and the output go (wrong owner, SELinux label, ...).
+for d in "$pkgdir" "$out"; do
+  if ! as_builder test -w "$d"; then
+    echo "::error::$builder (uid $(id -u "$builder")) cannot write to $d"
+    ls -ldnZ "$d" || ls -ldn "$d"
+    cat /proc/self/uid_map
+    exit 1
+  fi
+done
 
 as_builder bash "$here/check-sources.sh" "$pkgdir"
 

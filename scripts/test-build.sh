@@ -23,7 +23,7 @@ trap 'chmod -R u+rwX "$work" 2>/dev/null; rm -rf "$work"' EXIT
 mkdir -p "$work/$pkg"
 cp -r "$dir/." "$work/$pkg/"
 podman run --rm --userns=keep-id:uid=1000,gid=1000 --user 0:0 \
-  -v "$work/$pkg:/build/$pkg" -v "$repo/keys:/keys:ro" -v "$repo/scripts:/scripts:ro" -v "$out:/out" \
+  -v "$work/$pkg:/build/$pkg:z" -v "$repo/keys:/keys:ro,z" -v "$repo/scripts:/scripts:ro,z" -v "$out:/out:z" \
   "$image" bash /scripts/build-in-container.sh "/build/$pkg" /out
 echo "built into $out:"
 ls "$out"

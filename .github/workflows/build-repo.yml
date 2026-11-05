@@ -156,7 +156,8 @@ jobs:
         # installs the dependencies and checks the sources and PGP keys; the PKGBUILD's own code (check-sources, sourcing it,
         # gpg import, makepkg) runs there as an unprivileged user that cannot escalate. --userns=keep-id maps that user (uid 1000) to
         # the runner's own user, so the files it writes in the mounts belong to the runner. The container's root is a
-        # subuid that owns nothing on the host. Only these folders are mounted: the package, the output, the cargo cache,
+        # subuid that owns nothing on the host. The :z on the mounts relabels them for SELinux (the host labels /opt as usr_t, which a
+        # container may read but not write); it does nothing where SELinux is off. Only these folders are mounted: the package, the output, the cargo cache,
         # and the keys and scripts read-only.
         # Not signed here: the build job runs the PKGBUILD's code and never sees the signing key. The publish job signs
         # the packages that passed the scan.
@@ -170,17 +171,17 @@ jobs:
           cargo_args=()
           if [[ "$CARGO_USE" == "true" ]]; then
             mkdir -p .cargo-cache/home .cargo-cache/target
-            cargo_args+=(-v "$GITHUB_WORKSPACE/.cargo-cache:/cargo" -e CARGO_HOME=/cargo/home)
+            cargo_args+=(-v "$GITHUB_WORKSPACE/.cargo-cache:/cargo:z" -e CARGO_HOME=/cargo/home)
             if [[ "$CARGO_TARGET" == "true" ]]; then
               cargo_args+=(-e CARGO_TARGET_DIR=/cargo/target)
             fi
           fi
           for pkg in $PKG; do
             podman run --rm --userns=keep-id:uid=1000,gid=1000 --user 0:0 \
-              -v "$GITHUB_WORKSPACE/packages/$pkg:/build/$pkg" \
-              -v "$GITHUB_WORKSPACE/keys:/keys:ro" \
-              -v "$GITHUB_WORKSPACE/scripts:/scripts:ro" \
-              -v "$GITHUB_WORKSPACE/built-pkgs:/out" \
+              -v "$GITHUB_WORKSPACE/packages/$pkg:/build/$pkg:z" \
+              -v "$GITHUB_WORKSPACE/keys:/keys:ro,z" \
+              -v "$GITHUB_WORKSPACE/scripts:/scripts:ro,z" \
+              -v "$GITHUB_WORKSPACE/built-pkgs:/out:z" \
               "${cargo_args[@]}" \
               "$BUILD_IMAGE" bash /scripts/build-in-container.sh "/build/$pkg" /out
           done
