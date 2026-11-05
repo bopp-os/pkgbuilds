@@ -17,14 +17,22 @@ on:
 permissions:
   contents: read
 
+env:
+  # The build container, pinned by digest (docker.io/cachyos/cachyos-v3, CachyOS x86-64-v3). The packages in it are brought
+  # up to date with `pacman -Syu` on every run, so the pin only fixes the starting point; bump it now and then.
+  BUILD_IMAGE: docker.io/cachyos/cachyos-v3@sha256:a4f97f17f19e2ae5b3ecaa92bfad19995d5154776ef490e1e30dbd340a16a4df
+
 jobs:
   detect-changes:
     runs-on: [self-hosted, x86-64-v3]
     outputs:
       packages: ${{ steps.detect.outputs.packages }}
     steps:
-      - name: Clean root-owned files from previous build
-        run: sudo rm -rf /opt/github-runner/_work/pkgbuilds/pkgbuilds/built-pkgs
+      - name: Clear the output of the previous build
+        # The build runs in a rootless container that maps the runner's user to the build user, so everything it wrote is
+        # owned by the runner and plain rm works. `podman unshare` covers files that belong to the user namespace's other ids.
+        run: |
+          rm -rf "$GITHUB_WORKSPACE/built-pkgs" || podman unshare rm -rf "$GITHUB_WORKSPACE/built-pkgs"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,9 +86,8 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.packages != '[]'
     runs-on: [self-hosted, x86-64-v3]
-    container:
-      image: cachyos/cachyos-v3:latest   # CachyOS x86-64-v3 container
-      options: --privileged               # needed for fakeroot/makepkg
+    # No job container: the checkout and the cache run on the host as the runner's user. The build itself runs in a rootless
+    # podman container (the "Build package" step), where scripts/build-in-container.sh does everything that needs root.
     strategy:
       matrix:
         package: ${{ fromJson(needs.detect-changes.outputs.packages) }}
@@ -91,36 +98,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Add the bopp-os repository
-        # Packages here can depend on each other (litterbox-sandbox-addons needs litterbox-sandbox), and `makepkg -s` only
-        # installs dependencies from the repositories pacman knows. Appended last so Arch and CachyOS packages keep priority.
-        # The key comes from this checkout (keys/boppos.gpg), not from the network, and packages must be signed by it.
-        # Best effort: if the repository cannot be had, the job carries on exactly as before and only a package that really
-        # needs something from this repository fails.
-        run: |
-          # Fingerprint of the repository signing key (also pinned in bopp-os/cachyos scripts/setup_pacman_repos.sh).
-          want=3806768589376830FEA123D6CF30985CE903D47C
-          if grep -q '^\[bopp-os\]' /etc/pacman.conf; then echo "bopp-os repository already configured"; exit 0; fi
-          fpr=$(gpg --with-colons --show-keys keys/boppos.gpg | awk -F: '/^fpr/ {print $10; exit}')
-          if [ "$fpr" != "$want" ]; then
-            echo "::warning::bopp-os repository key is $fpr, expected $want; building without that repository"; exit 0
-          fi
-          if ! pacman-key --add keys/boppos.gpg || ! pacman-key --lsign-key "$fpr"; then
-            echo "::warning::could not import the bopp-os repository key; building without that repository"; exit 0
-          fi
-          printf '\n[bopp-os]\nSigLevel = Required DatabaseOptional\nServer = https://repo.ripps.me\n' >> /etc/pacman.conf
-          echo "Added the bopp-os repository (key $fpr)"
-
-      - name: Install build deps
-        run: |
-          pacman -Syu --noconfirm base-devel git
-
       - name: Fetch the files of link-only packages
+        env:
+          PKG: ${{ matrix.package }}
         run: |
           # A package folder with only .upstream-url/.upstream-path/.upstream-ref has no PKGBUILD in this repo:
           # its files live in another repo, at the release tag pinned in .upstream-ref (changed only by a reviewed PR).
           set -euo pipefail
-          for pkg in ${{ matrix.package }}; do
+          for pkg in $PKG; do
             dir="packages/$pkg"
             if [[ -f "$dir/PKGBUILD" || ! -f "$dir/.upstream-ref" ]]; then continue; fi
             url=$(tr -d '[:space:]' < "$dir/.upstream-url")
@@ -141,43 +126,6 @@ jobs:
             echo "Fetched $pkg from $url at $ref"
           done
 
-      - name: Create build user (makepkg refuses root)
-        run: |
-          useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          for pkg in ${{ matrix.package }}; do
-            chown -R builder:builder "packages/$pkg"
-          done
-
-      - name: Check the integrity of the package sources
-        # The PKGBUILD is sourced, which runs its top-level code: as the unprivileged builder, like makepkg itself.
-        run: |
-          for pkg in ${{ matrix.package }}; do
-            sudo -u builder bash scripts/check-sources.sh "packages/$pkg"
-          done
-
-      - name: Import PGP keys for sources
-        # Upstream signing keys are committed in keys/pgp/<fingerprint>.asc and checked against that fingerprint here: no
-        # keyserver is involved, and a missing or mismatching key fails the build.
-        run: |
-          set -euo pipefail
-          for pkg in ${{ matrix.package }}; do
-            keys=$(sudo -u builder bash -c 'source "packages/$1/PKGBUILD"; echo "${validpgpkeys[@]}"' _ "$pkg")
-            for key in $keys; do
-              file="keys/pgp/$key.asc"
-              if [[ ! -f "$file" ]]; then
-                echo "::error::$pkg: validpgpkeys lists $key but $file is not in the repository"
-                exit 1
-              fi
-              have=$(gpg --with-colons --show-keys "$file" | awk -F: '/^fpr/ {print $10; exit}')
-              if [[ "$have" != "$key" ]]; then
-                echo "::error::$file holds key $have, not $key"
-                exit 1
-              fi
-              sudo -u builder gpg --batch --import "$file"
-            done
-          done
-
       - name: Look for Rust packages (cargo cache)
         id: cargo
         env:
@@ -186,11 +134,11 @@ jobs:
           # A Rust package downloads and compiles hundreds of crates from scratch on every run (litterbox-sandbox: ~17 minutes),
           # so its cargo state lives in the GitHub Actions cache. CARGO_HOME (crate downloads) is safe for any package.
           # CARGO_TARGET_DIR moves the build output, so only a PKGBUILD that mentions it (and looks for its binaries there) opts in.
+          # The build step mounts the cache folder at /cargo in the container and sets the variables there.
           if grep -q cargo "packages/$PKG/PKGBUILD"; then
             echo "use=true" >> "$GITHUB_OUTPUT"
-            echo "CARGO_HOME=$GITHUB_WORKSPACE/.cargo-cache/home" >> "$GITHUB_ENV"
             if grep -q CARGO_TARGET_DIR "packages/$PKG/PKGBUILD"; then
-              echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/.cargo-cache/target" >> "$GITHUB_ENV"
+              echo "target=true" >> "$GITHUB_OUTPUT"
             fi
           fi
 
@@ -203,24 +151,38 @@ jobs:
           key: cargo-${{ matrix.package }}-${{ hashFiles(format('packages/{0}/PKGBUILD', matrix.package), format('packages/{0}/.upstream-ref', matrix.package)) }}
           restore-keys: cargo-${{ matrix.package }}-
 
-      - name: Prepare the cargo directories
-        if: steps.cargo.outputs.use == 'true'
-        run: |
-          mkdir -p .cargo-cache/home .cargo-cache/target
-          chown -R builder:builder .cargo-cache
-
       - name: Build package
+        # One rootless podman container per package. Inside, scripts/build-in-container.sh adds the bopp-os repository,
+        # installs the dependencies and checks the sources and PGP keys; the PKGBUILD's own code (check-sources, sourcing it,
+        # gpg import, makepkg) runs there as an unprivileged user that cannot escalate. --userns=keep-id maps that user (uid 1000) to
+        # the runner's own user, so the files it writes in the mounts belong to the runner. The container's root is a
+        # subuid that owns nothing on the host. Only these folders are mounted: the package, the output, the cargo cache,
+        # and the keys and scripts read-only.
+        # Not signed here: the build job runs the PKGBUILD's code and never sees the signing key. The publish job signs
+        # the packages that passed the scan.
+        env:
+          PKG: ${{ matrix.package }}
+          CARGO_USE: ${{ steps.cargo.outputs.use }}
+          CARGO_TARGET: ${{ steps.cargo.outputs.target }}
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/built-pkgs"
-          for pkg in ${{ matrix.package }}; do
-            cd "$GITHUB_WORKSPACE/packages/$pkg"
-            # sudo drops the environment: keep the cargo directories chosen above
-            # Not signed here: the build job runs the PKGBUILD's code and never sees the signing key. The publish job signs
-            # the packages that passed the scan.
-            sudo -u builder --preserve-env=CARGO_HOME,CARGO_TARGET_DIR makepkg -s --noconfirm --noprogressbar
-
-            ls -la *.pkg.tar.zst
-            cp *.pkg.tar.zst "$GITHUB_WORKSPACE/built-pkgs/"
+          set -euo pipefail
+          mkdir -p built-pkgs
+          cargo_args=()
+          if [[ "$CARGO_USE" == "true" ]]; then
+            mkdir -p .cargo-cache/home .cargo-cache/target
+            cargo_args+=(-v "$GITHUB_WORKSPACE/.cargo-cache:/cargo" -e CARGO_HOME=/cargo/home)
+            if [[ "$CARGO_TARGET" == "true" ]]; then
+              cargo_args+=(-e CARGO_TARGET_DIR=/cargo/target)
+            fi
+          fi
+          for pkg in $PKG; do
+            podman run --rm --userns=keep-id:uid=1000,gid=1000 --user 0:0 \
+              -v "$GITHUB_WORKSPACE/packages/$pkg:/build/$pkg" \
+              -v "$GITHUB_WORKSPACE/keys:/keys:ro" \
+              -v "$GITHUB_WORKSPACE/scripts:/scripts:ro" \
+              -v "$GITHUB_WORKSPACE/built-pkgs:/out" \
+              "${cargo_args[@]}" \
+              "$BUILD_IMAGE" bash /scripts/build-in-container.sh "/build/$pkg" /out
           done
 
       # Saved only after a successful build, and not again when the exact key was already restored. A new version gets a new
@@ -242,15 +204,13 @@ jobs:
       - name: Clean build artifacts
         if: always()
         run: |
-          # The cache lives on GitHub; do not leave a copy on the runner's disk
-          rm -rf "$GITHUB_WORKSPACE/.cargo-cache" || true
-          # The packages are already uploaded as an artifact
-          rm -rf "$GITHUB_WORKSPACE/built-pkgs" || true
-          # This job runs as root in a container, where the runner's work folder is mounted at /__w, not at its host path
-          # /opt/github-runner/_work. Hand the workspace back to the runner's user (the owner of the folder above it), or
-          # the next host job's checkout (scan) cannot delete the files left here.
-          owner=$(stat -c %u:%g "$GITHUB_WORKSPACE/..")
-          chown -R "$owner" "$GITHUB_WORKSPACE" || true
+          # Everything the container wrote belongs to the runner's user. Build trees can contain read-only directories
+          # (Go module caches), which the next checkout could not delete.
+          chmod -R u+rwX "$GITHUB_WORKSPACE/packages" "$GITHUB_WORKSPACE/.cargo-cache" "$GITHUB_WORKSPACE/built-pkgs" 2>/dev/null || true
+          for dir in .cargo-cache built-pkgs; do
+            # The cache lives on GitHub and the packages are already uploaded as an artifact: leave no copy on the runner's disk
+            rm -rf "${GITHUB_WORKSPACE:?}/$dir" || podman unshare rm -rf "${GITHUB_WORKSPACE:?}/$dir" || true
+          done
 
   scan:
     needs: [detect-changes, build]
@@ -288,15 +248,15 @@ jobs:
 
       - name: Scan with ClamAV
         id: clamscan
-        # The image ships with the current signature database; --pull always fetches the newest one. The runner's Docker
-        # remaps user ids, so the container cannot write any host file (not GitHub's output files, not a mounted folder):
-        # the workspace is mounted read-only, the script writes its outputs to /tmp inside the container, and they come
-        # back on stdout after a marker line while the scan log goes to stderr.
+        # The image ships with the current signature database; --pull always fetches the newest one. The workspace is
+        # mounted read-only and the script writes its outputs to /tmp inside the container, so nothing the scan runs can
+        # change a host file (not GitHub's output files, not a mounted folder). They come back on stdout after a marker
+        # line while the scan log goes to stderr. Rootless podman, like the build: the runner needs no docker group.
         run: |
           set -euo pipefail
           results="$RUNNER_TEMP/clamscan.txt"
-          docker run --rm --pull always -v "$GITHUB_WORKSPACE:/work:ro" -w /work \
-            -e GITHUB_OUTPUT=/tmp/output -e GITHUB_STEP_SUMMARY=/tmp/summary --entrypoint /bin/sh clamav/clamav:stable \
+          podman run --rm --pull always -v "$GITHUB_WORKSPACE:/work:ro" -w /work \
+            -e GITHUB_OUTPUT=/tmp/output -e GITHUB_STEP_SUMMARY=/tmp/summary --entrypoint /bin/sh docker.io/clamav/clamav:stable \
             -c 'set -e; touch /tmp/output /tmp/summary; sh scripts/clamscan-pkgs.sh scan-pkgs >&2
                 echo "=== output"; cat /tmp/output; echo "=== summary"; cat /tmp/summary' > "$results"
           sed -n '/^=== output$/,/^=== summary$/{/^===/d;p}' "$results" >> "$GITHUB_OUTPUT"
@@ -321,8 +281,9 @@ jobs:
       - name: Remove old ClamAV images
         if: always()
         # --pull always leaves the previous clamav/clamav:stable behind untagged after each database update. This removes
-        # untagged images only, so nothing another workload on the host still uses by tag is touched.
-        run: docker image prune -f
+        # untagged images only, so nothing another workload on the host still uses by tag is touched. It is the runner
+        # user's own podman storage, separate from every other user's.
+        run: podman image prune -f
 
   publish-repo:
     needs: [detect-changes, build, scan]
