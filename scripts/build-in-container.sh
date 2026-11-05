@@ -92,11 +92,12 @@ for key in "${pgpkeys[@]}"; do
 done
 
 # Dependencies: what `makepkg -s` would install through a privileged helper. Root installs them here, so makepkg itself never needs
-# privileges (and finds nothing missing, so it never asks for any).
+# privileges (and finds nothing missing, so it never asks for any). Like `makepkg -s`, only the pkgbase section counts: depends set
+# inside a split package's package_*() function are runtime-only and may not exist in the build repos (bootc, for one).
 info=$(cd "$pkgdir" && as_builder makepkg --printsrcinfo)
 mapfile -t own < <(awk -F' = ' '/^[[:space:]]*pkgname = / {print $2}' <<< "$info")
 mapfile -t deps < <(awk -F' = ' -v arch="$(uname -m)" \
-  '$1 ~ ("^[[:space:]]*(make|check)?depends(_" arch ")?$") {print $2}' <<< "$info" | sort -u)
+  '/^pkgname = / {exit} $1 ~ ("^[[:space:]]*(make|check)?depends(_" arch ")?$") {print $2}' <<< "$info" | sort -u)
 if [[ ${#deps[@]} -gt 0 ]]; then
   mapfile -t missing < <(pacman -T "${deps[@]}" || true)  # exit 127 means "some are missing"
   names=()
