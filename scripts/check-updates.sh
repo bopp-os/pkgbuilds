@@ -7,6 +7,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGES_DIR="$SCRIPT_DIR/../packages"
+# shellcheck source=upstream-version.sh
+source "$SCRIPT_DIR/upstream-version.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -97,10 +99,22 @@ for pkg_name in "${targets[@]}"; do
     continue
   fi
 
-  local_ver=$(grep -m1 '^pkgver=' "$local_pkgbuild" | cut -d= -f2 | tr -d '\r" '\''')
-  upstream_ver=$(echo "$upstream_pkgbuild" | grep -m1 '^pkgver=' | cut -d= -f2 | tr -d '\r" '\''')
+  upstream_file=$(mktemp)
+  echo "$upstream_pkgbuild" > "$upstream_file"
+  local_ver=$(pkgbuild_var "$local_pkgbuild" pkgver)
+  upstream_ver=$(pkgbuild_var "$upstream_file" pkgver)
 
-  if [[ "$local_ver" == "$upstream_ver" ]]; then
+  # With .upstream-version (AUR packages) compare the full upstream version with the one last synced, so upstream
+  # pkgrel-only bumps show up; local pkgrel bumps are ignored. Without it, compare pkgver only.
+  if [[ -f "$pkg_dir/.upstream-version" ]]; then
+    local_ver=$(tr -d '[:space:]' < "$pkg_dir/.upstream-version")
+    upstream_ver=$(pkgbuild_full_version "$upstream_file")
+  fi
+  changed=0
+  upstream_changed "$local_pkgbuild" "$upstream_file" "$pkg_dir/.upstream-version" && changed=1
+  rm -f "$upstream_file"
+
+  if [[ $changed -eq 0 ]]; then
     echo -e "${GREEN}✓ up to date ($local_ver)${RESET}"
   else
     echo -e "${RED}↑ UPSTREAM VERSION UPDATE AVAILABLE (local: $local_ver / upstream: $upstream_ver)${RESET}"
