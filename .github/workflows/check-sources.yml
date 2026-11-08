@@ -10,6 +10,8 @@ on:
       - 'scripts/check-sources.sh'
       - 'scripts/pin-release-checksums.sh'
       - 'scripts/test-pin-release-checksums.sh'
+      - 'scripts/bump-branch-commits.sh'
+      - 'scripts/test-bump-branch-commits.sh'
       - '.github/workflows/check-sources.yml'
 
 permissions:
@@ -26,6 +28,9 @@ jobs:
 
       - name: Test the checksum pinning script
         run: bash scripts/test-pin-release-checksums.sh
+
+      - name: Test the branch-following bump script
+        run: bash scripts/test-bump-branch-commits.sh
 
       - name: Check the sources of the packages this pull request changes
         env:

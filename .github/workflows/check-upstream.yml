@@ -119,6 +119,50 @@ jobs:
               continue
             fi
 
+            # Our own package built from pinned commits of a branch (.upstream-branch): not on the AUR. When the branch
+            # has moved, scripts/bump-branch-commits.sh repins the commits, version and checksums; open a PR with them.
+            if [[ -f "$pkg_dir/PKGBUILD" && -f "$pkg_dir/.upstream-branch" ]]; then
+              echo "--- Checking $pkg_name (follows a branch) ---"
+              bump_rc=0
+              bash scripts/bump-branch-commits.sh "$pkg_dir" || bump_rc=$?
+              if [[ $bump_rc -eq 10 ]]; then
+                continue
+              elif [[ $bump_rc -ne 0 ]]; then
+                echo "::warning::$pkg_name: could not bump to the branch head (exit $bump_rc), not checked this run"
+                git checkout -q -f main
+                continue
+              fi
+              new_ver=$(grep -m1 '^pkgver=' "$pkg_dir/PKGBUILD" | cut -d= -f2)-$(grep -m1 '^pkgrel=' "$pkg_dir/PKGBUILD" | cut -d= -f2)
+              new_commit=$(grep -m1 '^_commit=' "$pkg_dir/PKGBUILD" | cut -d= -f2)
+              branch="upstream-update/${pkg_name}"
+              git push origin --delete "$branch" 2>/dev/null || true
+              git checkout -b "$branch"
+              mv "$pkg_dir/.bump-log" bump-log.txt
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              git add "$pkg_dir/PKGBUILD"
+              git commit -m "upstream($pkg_name): $new_ver at ${new_commit:0:12}"
+              git push origin "$branch"
+              { echo "New commits on the followed branch:"; cat bump-log.txt; echo; git diff HEAD~1 HEAD -- "$pkg_dir"; } |
+                head -c 50000 > diff.txt
+              follow_branch=$(sed -n 's/^branch //p' "$pkg_dir/.upstream-branch")
+              follow_url=$(sed -n 's/^url //p' "$pkg_dir/.upstream-branch")
+              export PKG_NAME="$pkg_name"
+              SOURCE_INFO="**Follows:** \`$follow_branch\` of $follow_url"$'\n'"**New version:** \`$new_ver\` at \`$new_commit\`"
+              export SOURCE_INFO
+              envsubst '${PKG_NAME} ${SOURCE_INFO}' < .github/upstream-pr-template.md > pr_body_temp.md
+              sed -e '/\${DIFF_OUTPUT}/ {' -e 'r diff.txt' -e 'd' -e '}' pr_body_temp.md > pr_body.md
+              gh pr create \
+                --repo "$REPO" \
+                --title "upstream($pkg_name): $new_ver at ${new_commit:0:12}" \
+                --body-file pr_body.md \
+                --base main \
+                --head "$branch" \
+                --label "upstream-update" \
+                || echo "::warning::PR creation failed or already exists for $pkg_name"
+              continue
+            fi
+
             local_pkgbuild="$pkg_dir/PKGBUILD"
             if [[ ! -f "$local_pkgbuild" ]]; then
               echo "::warning::No PKGBUILD found for $pkg_name, skipping"
@@ -187,9 +231,15 @@ jobs:
                   fi
                 else
                   echo "::warning::No PKGBUILD found in cloned repo $git_url at path ${upstream_path:-PKGBUILD}"
+                  echo "  ? $pkg_name not checked (no upstream PKGBUILD to compare)"
+                  rm -rf "$clone_dir"
+                  continue
                 fi
               else
                 echo "::warning::Failed to clone upstream Git repo $git_url"
+                echo "  ? $pkg_name not checked (clone failed)"
+                rm -rf "$clone_dir"
+                continue
               fi
             else
               # Fetch upstream PKGBUILD via curl
