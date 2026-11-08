@@ -5,10 +5,10 @@
 pkgbase=boppos-bootc-installer
 pkgname=('boppos-bootc-installer' 'boppos-fisherman')
 pkgver=3.0.0
-pkgrel=2
+pkgrel=3
 # Pinned commits on the boppos branches. _fishcommit must match the fisherman submodule pin in bootc-installer.
-_commit=efe58f3fb0425e59ca505771017edb85ab71e038
-_fishcommit=fa556ba80eafb8bd10b405fb5385ae594011ba8a
+_commit=266143f7327343a5b9cfab6902e1c9ff093bb590
+_fishcommit=4a7ae3362cccb75537862199dd78c85e0481f1c0
 arch=('x86_64')
 url="https://github.com/bopp-os/bootc-installer"
 license=('GPL-3.0-only')
@@ -18,8 +18,8 @@ checkdepends=('python-pytest')
 # GitHub archives leave submodules empty, so fisherman comes as its own tarball.
 source=("bootc-installer-${_commit}.tar.gz::https://github.com/bopp-os/bootc-installer/archive/${_commit}.tar.gz"
         "fisherman-${_fishcommit}.tar.gz::https://github.com/bopp-os/fisherman/archive/${_fishcommit}.tar.gz")
-sha256sums=('fedc7cc8f8c5f8e7e8f49690a3f4c3b29a5ddb8b1ddf282aa6aeb912f6e7b7d9'
-            '5fc829b24442c64910e9ebfcbc97445a9c0631402be5d5d341e4bfbf7ba2aa77')
+sha256sums=('1ce1b8ed36f9702175ed55651af87745e64d4c9c646eba06d324db7a9f82e4d8'
+            '170473a107d7807639077c2a034d7cea75fa29cb613aabfb9857eb38d60ea0d5')
 
 prepare() {
   cd "bootc-installer-${_commit}"
@@ -62,7 +62,7 @@ package_boppos-bootc-installer() {
 package_boppos-fisherman() {
   pkgdesc="BoppOS fork of fisherman, the backend that partitions a disk and runs bootc install"
   depends=('podman' 'skopeo' 'util-linux' 'parted' 'dosfstools' 'btrfs-progs' 'e2fsprogs' 'cryptsetup'
-           'device-mapper' 'psmisc' 'openssl' 'shadow' 'tar' 'systemd')
+           'device-mapper' 'psmisc' 'openssl' 'shadow' 'tar' 'xz' 'systemd')
   optdepends=('bootc: install without a container (live media with an embedded image)'
               'efibootmgr: report the new EFI boot entry to the installer'
               'lvm2: deactivate LVM volume groups on the target disk'
