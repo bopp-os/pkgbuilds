@@ -1,0 +1,332 @@
+diff -ruN a/lvgl/src/drivers/display/drm/lv_linux_drm.c b/lvgl/src/drivers/display/drm/lv_linux_drm.c
+--- a/lvgl/src/drivers/display/drm/lv_linux_drm.c	2026-11-08 02:44:18.969691882 -0600
++++ b/lvgl/src/drivers/display/drm/lv_linux_drm.c	2026-11-08 02:44:18.993256968 -0600
+@@ -17,6 +17,7 @@
+ #include <time.h>
+ #include <unistd.h>
+ #include <string.h>
++#include <stdlib.h>
+ 
+ #include <xf86drm.h>
+ #include <xf86drmMode.h>
+@@ -78,6 +79,9 @@
+     drmModePropertyPtr conn_props[128];
+     drm_buffer_t drm_bufs[BUFFER_CNT];
+     drm_buffer_t * act_buf;
++    int rotation;       /* 0, or the panel's 90/270 degrees: LVGL then renders landscape and drm_flush rotates */
++    uint32_t rot_stride;
++    int rot_idx;
+ #if LV_USE_LINUX_DRM_GBM_BUFFERS
+     struct gbm_device * gbm_device;
+ #endif
+@@ -250,6 +254,27 @@
+     return LV_RESULT_OK;
+ }
+ 
++lv_result_t lv_linux_drm_set_rotation(lv_display_t * disp, int degrees)
++{
++    drm_dev_t * drm_dev = lv_display_get_driver_data(disp);
++    lv_color_format_t cf = lv_display_get_color_format(disp);
++
++    if((degrees != 90 && degrees != 270) || lv_color_format_get_bpp(cf) != 32) return LV_RESULT_INVALID;
++
++    int32_t hor_res = drm_dev->height;
++    int32_t ver_res = drm_dev->width;
++    uint32_t stride = lv_draw_buf_width_to_stride(hor_res, cf);
++    size_t size = (size_t)stride * ver_res;
++    uint8_t * buf = malloc(size);
++    if(buf == NULL) return LV_RESULT_INVALID;
++
++    lv_display_set_resolution(disp, hor_res, ver_res);
++    lv_display_set_buffers_with_stride(disp, buf, NULL, size, stride, LV_DISPLAY_RENDER_MODE_FULL);
++    drm_dev->rot_stride = stride;
++    drm_dev->rotation = degrees;
++    return LV_RESULT_OK;
++}
++
+ void lv_linux_drm_set_mode_cb(lv_display_t * disp, lv_linux_drm_select_mode_cb_t callback)
+ {
+     LV_UNUSED(disp);
+@@ -1064,14 +1089,34 @@
+     }
+ }
+ 
++/* Copy a landscape frame to a portrait panel. 90: the panel's left side is up; 270: its right side is up. */
++static void drm_rotate_frame(const drm_dev_t * drm_dev, const uint8_t * src, drm_buffer_t * dst)
++{
++    const uint32_t w = drm_dev->width, h = drm_dev->height;
++    const bool left_up = drm_dev->rotation == 90;
++    const ptrdiff_t step = left_up ? -(ptrdiff_t)dst->pitch : (ptrdiff_t)dst->pitch;
++
++    for(uint32_t v = 0; v < w; v++) {
++        const uint32_t * row = (const uint32_t *)(src + v * drm_dev->rot_stride);
++        const uint32_t x = left_up ? v : w - 1 - v;
++        uint8_t * out = (uint8_t *)dst->map + (left_up ? (size_t)(h - 1) * dst->pitch : 0) + x * 4;
++        for(uint32_t u = 0; u < h; u++, out += step) *(uint32_t *)out = row[u];
++    }
++}
++
+ static void drm_flush(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)
+ {
+     if(!lv_display_flush_is_last(disp)) return;
+ 
+     LV_UNUSED(area);
+-    LV_UNUSED(px_map);
+     drm_dev_t * drm_dev = lv_display_get_driver_data(disp);
+ 
++    if(drm_dev->rotation) {
++        drm_dev->act_buf = &drm_dev->drm_bufs[drm_dev->rot_idx];
++        drm_dev->rot_idx = (drm_dev->rot_idx + 1) % BUFFER_CNT;
++        drm_rotate_frame(drm_dev, px_map, drm_dev->act_buf);
++    }
++
+     LV_ASSERT(drm_dev->act_buf != NULL);
+ 
+     if(drm_dmabuf_set_plane(drm_dev, drm_dev->act_buf)) {
+diff -ruN a/lvgl/src/drivers/display/drm/lv_linux_drm.h b/lvgl/src/drivers/display/drm/lv_linux_drm.h
+--- a/lvgl/src/drivers/display/drm/lv_linux_drm.h	2026-11-08 02:44:18.969691882 -0600
++++ b/lvgl/src/drivers/display/drm/lv_linux_drm.h	2026-11-08 02:44:18.993528770 -0600
+@@ -69,6 +69,13 @@
+ lv_result_t lv_linux_drm_set_file(lv_display_t * disp, const char * file, int64_t connector_id);
+ 
+ /**
++ * Render landscape on a portrait panel, in software. Call after lv_linux_drm_set_file().
++ * @param degrees 90 when the panel's left side is up, 270 when its right side is up
++ * @return LV_RESULT_OK, or LV_RESULT_INVALID for another angle, a format that is not 32-bit or no memory
++ */
++lv_result_t lv_linux_drm_set_rotation(lv_display_t * disp, int degrees);
++
++/**
+  * @brief Automatically find a suitable DRM device path
+  *
+  * Scans the system for available DRM devices and returns the path to a suitable
+diff -ruN a/man/unl0kr.conf.5.scd b/man/unl0kr.conf.5.scd
+--- a/man/unl0kr.conf.5.scd	2026-11-08 02:44:18.968591761 -0600
++++ b/man/unl0kr.conf.5.scd	2026-11-08 02:44:18.995847664 -0600
+@@ -32,6 +32,10 @@
+ *backend* = <fbdev|drm|sdl>
+ 	The rendering backend to use. Default: the first compiled backend from the list above.
+ 
++*rotation* = <0|90|270>
++	Software rotation for a portrait panel on the DRM backend: 90 when the panel's
++	left side is up, 270 when its right side is up. Default: 0.
++
+ *timeout* = <value>
+ 	The time in seconds before unl0kr will consider the entry a failure 
+ 	and shutdown. Setting timeout to 0 disables this feature. Default: 0.
+diff -ruN a/shared/display.c b/shared/display.c
+--- a/shared/display.c	2026-11-08 02:44:18.963733870 -0600
++++ b/shared/display.c	2026-11-08 02:44:18.993826422 -0600
+@@ -4,6 +4,7 @@
+  */
+ 
+ #include "display.h"
++#include "indev.h"
+ #include "log.h"
+ 
+ #include <stdio.h>
+@@ -60,6 +61,13 @@
+         }
+ 
+         lv_linux_drm_set_file(disp, drm_path, -1);
++        if (config && config->rotation) {
++            if (lv_linux_drm_set_rotation(disp, config->rotation) == LV_RESULT_OK) {
++                bbx_indev_set_rotation(config->rotation);
++            } else {
++                bbx_log(BBX_LOG_LEVEL_WARNING, "Could not rotate the display by %d degrees", config->rotation);
++            }
++        }
+         break;
+ #endif /* LV_USE_LINUX_DRM */
+ 
+diff -ruN a/shared/display.h b/shared/display.h
+--- a/shared/display.h	2026-11-08 02:44:18.963733870 -0600
++++ b/shared/display.h	2026-11-08 02:44:18.993640371 -0600
+@@ -23,6 +23,8 @@
+     int dpi;
+     /* Framebuffer force refresh quirk */
+     bool fbdev_force_refresh;
++    /* Panel rotation for the DRM backend: 0, 90 (left side up) or 270 (right side up) */
++    int rotation;
+ } bbx_display_config_t;
+ 
+ /**
+diff -ruN a/shared/indev.c b/shared/indev.c
+--- a/shared/indev.c	2026-11-08 02:44:18.964047321 -0600
++++ b/shared/indev.c	2026-11-08 02:44:32.410156891 -0600
+@@ -102,6 +102,31 @@
+  * Static functions
+  */
+ 
++static int indev_rotation = 0;
++
++void bbx_indev_set_rotation(int degrees) {
++    indev_rotation = degrees;
++}
++
++/* The panel's own size: rotation swaps the display's. */
++static void panel_size(const lv_display_t *display, int32_t *w, int32_t *h) {
++    *w = indev_rotation ? display->physical_ver_res : display->physical_hor_res;
++    *h = indev_rotation ? display->physical_hor_res : display->physical_ver_res;
++}
++
++/* Panel coordinates to screen coordinates; the inverse of drm_rotate_frame in LVGL's DRM driver. */
++static void rotate_point(int32_t *x, int32_t *y, int32_t w, int32_t h) {
++    const int32_t px = *x, py = *y;
++
++    if (indev_rotation == 90) {
++        *x = h - 1 - py;
++        *y = px;
++    } else if (indev_rotation == 270) {
++        *x = py;
++        *y = w - 1 - px;
++    }
++}
++
+ static int open_restricted(const char *path, int flags, void *user_data) {
+     LV_UNUSED(user_data);
+     int fd = open(path, flags);
+@@ -509,8 +534,13 @@
+             struct indev_ext *data = lv_indev_get_user_data(ext->pointer1);
+             lv_display_t* display = lv_indev_get_display(ext->pointer1);
+ 
+-            int32_t x = libinput_event_pointer_get_absolute_x_transformed(pointer_event, display->physical_hor_res);
+-            int32_t y = libinput_event_pointer_get_absolute_y_transformed(pointer_event, display->physical_ver_res);
++            int32_t x, y, panel_w, panel_h;
++            {
++                panel_size(display, &panel_w, &panel_h);
++                x = libinput_event_pointer_get_absolute_x_transformed(pointer_event, panel_w);
++                y = libinput_event_pointer_get_absolute_y_transformed(pointer_event, panel_h);
++                rotate_point(&x, &y, panel_w, panel_h);
++            }
+             x -= display->offset_x;
+             y -= display->offset_y;
+             if (x < 0 || x >= display->hor_res || y < 0 || y >= display->ver_res)
+@@ -537,8 +567,13 @@
+             struct indev_ext *data = lv_indev_get_user_data(pointer);
+             lv_display_t* display = lv_indev_get_display(pointer);
+ 
+-            int32_t x = libinput_event_touch_get_x_transformed(touch_event, display->physical_hor_res);
+-            int32_t y = libinput_event_touch_get_y_transformed(touch_event, display->physical_ver_res);
++            int32_t x, y, panel_w, panel_h;
++            {
++                panel_size(display, &panel_w, &panel_h);
++                x = libinput_event_touch_get_x_transformed(touch_event, panel_w);
++                y = libinput_event_touch_get_y_transformed(touch_event, panel_h);
++                rotate_point(&x, &y, panel_w, panel_h);
++            }
+             x -= display->offset_x;
+             y -= display->offset_y;
+             if (x < 0 || x >= display->hor_res || y < 0 || y >= display->ver_res)
+@@ -565,8 +600,13 @@
+             struct indev_ext *data = lv_indev_get_user_data(pointer);
+             lv_display_t* display = lv_indev_get_display(pointer);
+ 
+-            int32_t x = libinput_event_touch_get_x_transformed(touch_event, display->physical_hor_res);
+-            int32_t y = libinput_event_touch_get_y_transformed(touch_event, display->physical_ver_res);
++            int32_t x, y, panel_w, panel_h;
++            {
++                panel_size(display, &panel_w, &panel_h);
++                x = libinput_event_touch_get_x_transformed(touch_event, panel_w);
++                y = libinput_event_touch_get_y_transformed(touch_event, panel_h);
++                rotate_point(&x, &y, panel_w, panel_h);
++            }
+             x -= display->offset_x;
+             y -= display->offset_y;
+             if (x < 0 || x >= display->hor_res || y < 0 || y >= display->ver_res)
+@@ -607,8 +647,13 @@
+             if (libinput_event_tablet_tool_get_tip_state(tablet_tool_event) == LIBINPUT_TABLET_TOOL_TIP_DOWN) {
+                 lv_display_t* display = lv_indev_get_display(ext->pointer1);
+ 
+-                int32_t x = libinput_event_tablet_tool_get_x_transformed(tablet_tool_event, display->physical_hor_res);
+-                int32_t y = libinput_event_tablet_tool_get_y_transformed(tablet_tool_event, display->physical_ver_res);
++                int32_t x, y, panel_w, panel_h;
++                {
++                    panel_size(display, &panel_w, &panel_h);
++                    x = libinput_event_tablet_tool_get_x_transformed(tablet_tool_event, panel_w);
++                    y = libinput_event_tablet_tool_get_y_transformed(tablet_tool_event, panel_h);
++                    rotate_point(&x, &y, panel_w, panel_h);
++                }
+                 x -= display->offset_x;
+                 y -= display->offset_y;
+                 if (x < 0 || x >= display->hor_res || y < 0 || y >= display->ver_res)
+@@ -634,8 +679,13 @@
+             struct indev_ext *data = lv_indev_get_user_data(ext->pointer1);
+             lv_display_t* display = lv_indev_get_display(ext->pointer1);
+ 
+-            int32_t x = libinput_event_tablet_tool_get_x_transformed(tablet_tool_event, display->physical_hor_res);
+-            int32_t y = libinput_event_tablet_tool_get_y_transformed(tablet_tool_event, display->physical_ver_res);
++            int32_t x, y, panel_w, panel_h;
++            {
++                panel_size(display, &panel_w, &panel_h);
++                x = libinput_event_tablet_tool_get_x_transformed(tablet_tool_event, panel_w);
++                y = libinput_event_tablet_tool_get_y_transformed(tablet_tool_event, panel_h);
++                rotate_point(&x, &y, panel_w, panel_h);
++            }
+             x -= display->offset_x;
+             y -= display->offset_y;
+             if (x < 0 || x >= display->hor_res || y < 0 || y >= display->ver_res)
+diff -ruN a/shared/indev.h b/shared/indev.h
+--- a/shared/indev.h	2026-11-08 02:44:18.964047321 -0600
++++ b/shared/indev.h	2026-11-08 02:44:18.993915991 -0600
+@@ -59,6 +59,11 @@
+  * Set a function that will be called on pressing KEY_POWER.
+  */
+ void bbx_indev_set_key_power_cb(void (*callback)());
++
++/**
++ * Map absolute input from a portrait panel to a landscape screen: 0, 90 (left side up) or 270 (right side up).
++ */
++void bbx_indev_set_rotation(int degrees);
+ #endif
+ 
+ /**
+diff -ruN a/unl0kr/config.c b/unl0kr/config.c
+--- a/unl0kr/config.c	2026-11-08 02:44:18.965053669 -0600
++++ b/unl0kr/config.c	2026-11-08 02:44:18.995470593 -0600
+@@ -55,6 +55,12 @@
+             /* Use a max ceiling of 60 minutes (3600 secs) */
+             opts->general.timeout = (uint16_t)LV_MIN(strtoul(value, (char **)NULL, 10), 3600);
+             return 1;
++        } else if (strcmp(key, "rotation") == 0) {
++            int rotation = (int)strtol(value, (char **)NULL, 10);
++            if (rotation == 0 || rotation == 90 || rotation == 270) {
++                opts->general.rotation = rotation;
++                return 1;
++            }
+         }
+     } else if (strcmp(section, "keyboard") == 0) {
+         if (strcmp(key, "autohide") == 0) {
+@@ -162,6 +168,7 @@
+     opts->general.animations = true;
+     opts->general.backend = 0;
+     opts->general.timeout = 0;
++    opts->general.rotation = 0;
+     opts->keyboard.autohide = true;
+     opts->keyboard.layout_id = SQ2LV_LAYOUT_US;
+     opts->keyboard.popovers = true;
+diff -ruN a/unl0kr/config.h b/unl0kr/config.h
+--- a/unl0kr/config.h	2026-11-08 02:44:18.965053669 -0600
++++ b/unl0kr/config.h	2026-11-08 02:44:18.995144748 -0600
+@@ -27,6 +27,8 @@
+     bbx_backends_backend_id_t backend;
+     /* Timeout (in seconds) - once elapsed, the device will shutdown. 0 (default) to disable */
+     uint16_t timeout;
++    /* Panel rotation for the DRM backend: 0, 90 (left side up) or 270 (right side up) */
++    int rotation;
+ } ul_config_opts_general;
+ 
+ /**
+diff -ruN a/unl0kr/main.c b/unl0kr/main.c
+--- a/unl0kr/main.c	2026-11-08 02:44:18.965053669 -0600
++++ b/unl0kr/main.c	2026-11-08 02:44:18.995696980 -0600
+@@ -438,7 +438,8 @@
+         .x_offset = cli_opts.common.x_offset,
+         .y_offset = cli_opts.common.y_offset,
+         .dpi = cli_opts.common.dpi,
+-        .fbdev_force_refresh = conf_opts.quirks.fbdev_force_refresh
++        .fbdev_force_refresh = conf_opts.quirks.fbdev_force_refresh,
++        .rotation = conf_opts.general.rotation
+     };
+ 
+     /* Initialize display */

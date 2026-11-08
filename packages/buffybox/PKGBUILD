@@ -3,7 +3,7 @@
 pkgbase=buffybox
 pkgname=(buffyboard unl0kr)
 pkgver=3.6.0
-pkgrel=1
+pkgrel=2
 pkgdesc="A suite of graphical applications for the terminal"
 url="https://gitlab.postmarketos.org/postmarketOS/buffybox/"
 arch=('x86_64' 'aarch64')
@@ -18,9 +18,11 @@ source=(
     "sd-unl0kr"
     "unl0kr-install"
     "unl0kr-hooks"
+    "unl0kr-rotation.patch"
 )
 b2sums=('6ac253b5dc9abd468cebc75ed87d642868f20655d24a76b3414a72845ea279749ce8944ce9a0e9535597c41b312b6af0eeba245d956e744216c6dee10a95d166'
         '8aa93853b58f4ab589dde891136b2de4353353f663808b111ab8672fb5a4e55686ea90ff90ea041dae6f6198dc97ba6a1d72204080bb608787a818459bb1b46c'
+        'SKIP'
         'SKIP'
         'SKIP'
         'SKIP')
@@ -28,6 +30,8 @@ b2sums=('6ac253b5dc9abd468cebc75ed87d642868f20655d24a76b3414a72845ea279749ce8944
 prepare() {
     rm -rf "buffybox-$pkgver/lvgl"
     mv -f "lvgl-$_lvgl_commit" "buffybox-$pkgver/lvgl"
+    # BoppOS: software rotation for portrait panels on the DRM backend (general.rotation in unl0kr.conf)
+    patch -d "buffybox-$pkgver" -p1 < unl0kr-rotation.patch
 }
 
 build() {
