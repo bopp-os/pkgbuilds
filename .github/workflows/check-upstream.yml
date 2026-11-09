@@ -35,6 +35,8 @@ jobs:
             --repo "$REPO" || true
 
           updated_packages=()
+          # shellcheck source=scripts/upstream-version.sh
+          source scripts/upstream-version.sh
 
           for pkg_dir in packages/*/; do
             git checkout -f main
@@ -212,6 +214,7 @@ jobs:
             fi
 
             has_changes=0
+            upstream_full_ver=""
             upstream_ver="unknown"
 
             if [[ -n "$git_url" ]]; then
@@ -224,9 +227,16 @@ jobs:
                 fi
 
                 if [[ -f "$upstream_pkgbuild_path" ]]; then
-                  local_ver=$(grep -m1 '^pkgver=' "$local_pkgbuild" | cut -d= -f2 | tr -d '\r" '\''')
-                  upstream_ver=$(grep -m1 '^pkgver=' "$upstream_pkgbuild_path" | cut -d= -f2 | tr -d '\r" '\''')
-                  if [[ "$local_ver" != "$upstream_ver" ]]; then
+                  upstream_ver=$(pkgbuild_var "$upstream_pkgbuild_path" pkgver)
+                  # AUR: compare the full upstream version with .upstream-version (last synced; pkgver-only when that
+                  # file is missing), so upstream pkgrel-only bumps are picked up without fighting our own bumps.
+                  if [[ "$git_url" =~ ^https://aur\.archlinux\.org/ ]]; then
+                    if upstream_changed "$local_pkgbuild" "$upstream_pkgbuild_path" "$pkg_dir/.upstream-version"; then
+                      has_changes=1
+                      upstream_full_ver=$(pkgbuild_full_version "$upstream_pkgbuild_path")
+                      upstream_ver="$upstream_full_ver"
+                    fi
+                  elif [[ "$(pkgbuild_var "$local_pkgbuild" pkgver)" != "$upstream_ver" ]]; then
                     has_changes=1
                   fi
                 else
@@ -289,12 +299,25 @@ jobs:
                 sync_src_dir="$clone_dir/$upstream_path"
               fi
 
-              # Remove all non-dot files/directories in packages/<pkg>
+              # Keep our current PKGBUILD to decide the pkgrel after the sync
+              old_pkgbuild=$(mktemp)
+              cp "$local_pkgbuild" "$old_pkgbuild"
+
+              # Remove all non-dot files/directories in packages/<pkg> (dotfiles incl. .upstream-version are kept)
               find "$pkg_dir" -mindepth 1 -maxdepth 1 ! -name ".*" -exec rm -rf {} +
 
               # Copy new/updated files
               cp -r "$sync_src_dir"/* "$pkg_dir/"
               rm -rf "$clone_dir"
+
+              # Record what AUR had, then make sure pacman sees an upgrade if only pkgrel moved upstream
+              if [[ -n "$upstream_full_ver" ]]; then
+                printf '%s\n' "$upstream_full_ver" > "$pkg_dir/.upstream-version"
+                new_rel=$(bump_pkgrel_after_sync "$old_pkgbuild" "$local_pkgbuild")
+                echo "  pkgrel after sync: $new_rel"
+                upstream_ver="$(pkgbuild_var "$local_pkgbuild" pkgver)-$new_rel"
+              fi
+              rm -f "$old_pkgbuild"
             else
               # Write upstream PKGBUILD only
               echo "$upstream_pkgbuild" > "$local_pkgbuild"
