@@ -36,6 +36,11 @@ for pkg_name in "${targets[@]}"; do
     continue
   fi
 
+  if [[ -f "$pkg_dir/.upstream-skip" ]]; then
+    echo -e "${YELLOW}- $pkg_name is maintained locally (.upstream-skip), not checked${RESET}"
+    continue
+  fi
+
   upstream_name="$pkg_name"
   if [[ -f "$pkg_dir/.upstream-name" ]]; then
     upstream_name=$(cat "$pkg_dir/.upstream-name" | tr -d '[:space:]')
