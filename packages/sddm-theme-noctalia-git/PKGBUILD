@@ -2,6 +2,8 @@
 pkgname=sddm-theme-noctalia-git
 pkgver=r24.05d3761
 pkgrel=4
+# r24.05d3761 (the pinned commit) sorts below the r27.3a717c3 build already in the repo, which repo-add then keeps.
+epoch=1
 pkgdesc="a theme designed to complement the Noctalia Shell experience."
 arch=('any')
 url="https://github.com/mda-dev/noctalia-sddm-theme"
