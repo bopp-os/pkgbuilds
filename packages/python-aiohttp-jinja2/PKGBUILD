@@ -3,7 +3,7 @@
 _pyname=aiohttp-jinja2
 pkgname=python-$_pyname
 pkgver=1.6
-pkgrel=2
+pkgrel=3
 pkgdesc='jinja2 template renderer for aiohttp.web'
 arch=(any)
 url='http://aiohttp-jinja2.aio-libs.org/'
@@ -28,6 +28,13 @@ check() {
   python -m venv --system-site-packages test-env
   test-env/bin/python -m installer dist/*.whl
   sed -i '/--cov/d' pytest.ini
+  # BoppOS: with current Arch packages, two warnings become test failures under the package's filterwarnings = error.
+  # pytest-asyncio 1.x warns when this option is unset:
+  sed -i '/^\[pytest\]/a asyncio_default_fixture_loop_scope = function' pytest.ini
+  # aiohttp 3.14 warns (NotAppKeyWarning) because 1.6 stores context under plain string request keys; at run time it
+  # is only a warning, so the tests ignore it rather than fail on it.
+  # (after "error": later filterwarnings entries win)
+  sed -i 's/^    error$/&\n    ignore::aiohttp.web_exceptions.NotAppKeyWarning/' pytest.ini
 
   test-env/bin/python -m pytest -v
 }
