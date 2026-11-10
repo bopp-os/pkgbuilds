@@ -1,7 +1,7 @@
 # Maintainer: shinka <shinnkka1@gmail.com>
 pkgname=sddm-theme-noctalia-git
 pkgver=r24.05d3761
-pkgrel=3
+pkgrel=4
 pkgdesc="a theme designed to complement the Noctalia Shell experience."
 arch=('any')
 url="https://github.com/mda-dev/noctalia-sddm-theme"
@@ -12,7 +12,6 @@ provides=("${pkgname%-git}=$pkgver" "$pkgname=$pkgver")
 conflicts=("${pkgname%-git}" "$pkgname")
 source=("git+$url.git#commit=05d3761ec0a85563466aef320d1f1cf2b3660f6d")
 sha256sums=('SKIP')
-install="sddm-theme-noctalia.install"
 
 pkgver() {
   cd "$srcdir/noctalia-sddm-theme"
