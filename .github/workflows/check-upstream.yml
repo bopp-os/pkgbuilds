@@ -42,6 +42,13 @@ jobs:
             git checkout -f main
             pkg_name=$(basename "$pkg_dir")
 
+            # A package we maintain ourselves even though the AUR has one of the same name (the sync below would
+            # replace our changes with the AUR copy): .upstream-skip opts it out of every upstream check.
+            if [[ -f "$pkg_dir/.upstream-skip" ]]; then
+              echo "--- Skipping $pkg_name (.upstream-skip) ---"
+              continue
+            fi
+
             # Allow override via .upstream-name
             upstream_name="$pkg_name"
             if [[ -f "$pkg_dir/.upstream-name" ]]; then
