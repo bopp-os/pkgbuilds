@@ -21,7 +21,7 @@ license=('GPL-2.0-only')
 depends=('python' 'python-aiohttp' 'python-aiohttp-jinja2' 'python-aiohttp-cors'
   'python-watchdog' 'python-certifi' 'python-packaging' 'python-multidict'
   'python-setproctitle' 'lsof' 'util-linux')
-makedepends=('pnpm' 'python-poetry' 'python-installer')
+makedepends=('nodejs' 'pnpm' 'python-poetry' 'python-installer')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz"
   "decky-loader@.service"
   "decky-loader-helper"
