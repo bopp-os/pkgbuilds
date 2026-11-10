@@ -6,7 +6,7 @@
 #     into the working directory with mode 777 and overwrite the systemd unit with one that runs it as root.
 #   - The start helper writes into the user's home only as that user, and refuses system accounts.
 #
-# No .upstream-url on purpose: check-upstream.yml replaces every file of a synced package with the AUR copy, which
+# .upstream-skip on purpose: without it check-upstream.yml syncs this package from the AUR, replacing every file with the AUR copy, which
 # would drop these changes. To update: bump pkgver, run updpkgsums, check the patch still applies, and read the
 # upstream diff (https://github.com/SteamDeckHomebrew/decky-loader/compare/v<old>...v<new>).
 #
