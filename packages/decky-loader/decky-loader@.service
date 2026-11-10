@@ -1,0 +1,27 @@
+[Unit]
+Description=Decky Loader (Steam plugin loader) for %i
+After=network.target
+
+[Service]
+Type=simple
+# Decky runs as root and drops each plugin to %i unless its plugin.json asks for root.
+User=root
+Restart=always
+KillMode=process
+TimeoutStopSec=15
+# Plugins and Decky's settings live here, owned by root: a process running as %i cannot add or change a plugin,
+# so it cannot get one run as root. Decky keeps plugin data and logs in the home folder below.
+StateDirectory=decky-loader/%i
+StateDirectoryMode=0755
+WorkingDirectory=/var/lib/decky-loader/%i
+ExecStartPre=/usr/lib/decky-loader/decky-loader-helper %i
+ExecStart=/usr/bin/decky-loader
+Environment=PRIVILEGED_PATH=/var/lib/decky-loader/%i
+Environment=UNPRIVILEGED_PATH=/home/%i/.local/var/opt/decky-loader
+Environment=UNPRIVILEGED_USER=%i
+# The package manager owns this unit; Decky must never rewrite it (its updater is also patched out).
+Environment=KEEP_SYSTEMD_SERVICE=1
+Environment=LOG_LEVEL=INFO
+
+[Install]
+WantedBy=multi-user.target
