@@ -1,0 +1,68 @@
+# Maintainer: BoppOS <https://github.com/bopp-os>
+# Based on the AUR decky-loader package by restitux <restitux@ohea.xyz> (3.3.1-1), changed for BoppOS:
+#   - Plugins and Decky's settings live in root-owned /var/lib/decky-loader/<user> (PRIVILEGED_PATH), not in the
+#     user's home, so a process running as the user cannot plant or edit a plugin that Decky runs as root.
+#   - Decky's built-in updater is patched out (disable-self-update.patch). It would download the upstream binary
+#     into the working directory with mode 777 and overwrite the systemd unit with one that runs it as root.
+#   - The start helper writes into the user's home only as that user, and refuses system accounts.
+#
+# No .upstream-url on purpose: check-upstream.yml replaces every file of a synced package with the AUR copy, which
+# would drop these changes. To update: bump pkgver, run updpkgsums, check the patch still applies, and read the
+# upstream diff (https://github.com/SteamDeckHomebrew/decky-loader/compare/v<old>...v<new>).
+#
+# Enable for one user with: systemctl enable --now decky-loader@<user>.service
+pkgname=decky-loader
+pkgver=3.3.1
+pkgrel=1
+pkgdesc="Homebrew plugin loader for the Steam client (Decky Loader, BoppOS build)"
+arch=('x86_64')
+url="https://github.com/SteamDeckHomebrew/decky-loader"
+license=('GPL-2.0-only')
+depends=('python' 'python-aiohttp' 'python-aiohttp-jinja2' 'python-aiohttp-cors'
+  'python-watchdog' 'python-certifi' 'python-packaging' 'python-multidict'
+  'python-setproctitle' 'lsof' 'util-linux')
+makedepends=('pnpm' 'python-poetry' 'python-installer')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz"
+  "decky-loader@.service"
+  "decky-loader-helper"
+  "disable-self-update.patch")
+sha256sums=('8c102ef54c7be4b2505564850e865c124f85712e5636b164bc73134ecf0a5813'
+            '08b9b72988c68278ed35f109f53c272dee2e5da3018b6809768075c0da7448d6'
+            '1d97e835dd9bb24fc236ea6b9e40f7a4a8d5176297e8e21e20e5e1510bfc8065'
+            'a2c841bb14c1c8a941b9dbfd4bec78e080c9b4c12246eec5063b165f464f0e4f')
+
+prepare() {
+  cd "$srcdir/$pkgname-$pkgver"
+  patch -Np1 -i "$srcdir/disable-self-update.patch"
+
+  cd backend
+  # Permit running with the distribution's Python
+  sed -i 's/python = ".*"/python = ">=3.11"/' pyproject.toml
+  # poetry-dynamic-versioning needs the git history, which the release tarball does not have
+  sed -i '/\[tool\.poetry-dynamic-versioning\]/,/^[[:space:]]*enable/ s/enable = true/enable = false/' pyproject.toml
+  # poetry-core 2.x drops gitignored files listed in `include` when the build folder has no .gitignore of its own;
+  # list the frontend's static assets explicitly so they end up in the wheel.
+  sed -i 's|"decky_loader/static/\*"|{ path = "decky_loader/static/**/*", format = ["wheel"] }|' pyproject.toml
+}
+
+build() {
+  cd "$srcdir/$pkgname-$pkgver"
+
+  # JS frontend: exact versions from the lockfile, no install scripts
+  cd frontend
+  pnpm i --frozen-lockfile --ignore-scripts
+  pnpm run build
+  cd ..
+
+  # Python backend wheel
+  cd backend
+  poetry version "$pkgver"
+  poetry build --format wheel
+}
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" backend/dist/*.whl
+  install -Dm 644 "$srcdir/decky-loader@.service" "$pkgdir/usr/lib/systemd/system/decky-loader@.service"
+  install -Dm 755 "$srcdir/decky-loader-helper" "$pkgdir/usr/lib/decky-loader/decky-loader-helper"
+}

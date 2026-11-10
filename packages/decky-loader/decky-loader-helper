@@ -1,0 +1,30 @@
+#!/bin/sh
+# ExecStartPre of decky-loader@<user>.service, which runs as root. It prepares the user's side of Decky.
+# Everything it creates in the user's home it creates as that user (runuser), so a symlink planted there cannot
+# redirect a root write to another file.
+set -eu
+
+user=${1:?usage: decky-loader-helper <user>}
+
+uid=$(id -u -- "$user" 2>/dev/null) || { echo "decky-loader: no such user: $user" >&2; exit 1; }
+if [ "$uid" -lt 1000 ] || [ "$uid" -eq 65534 ]; then
+    echo "decky-loader: refusing to run for system account $user (uid $uid)" >&2
+    exit 1
+fi
+
+home=$(getent passwd "$user" | cut -d: -f6)
+# The unit points Decky at /home/<user>; stop here rather than run with a data folder the user does not have.
+if [ "$(realpath -- "$home")" != "$(realpath -- "/home/$user" 2>/dev/null || true)" ]; then
+    echo "decky-loader: home of $user is $home, but the unit expects /home/$user" >&2
+    exit 1
+fi
+
+# shellcheck disable=SC2016 # $1 expands in the inner shell, as the user
+runuser -u "$user" -- sh -c '
+    mkdir -p "$1/.local/var/opt/decky-loader"
+    # Decky injects into the Steam client through its CEF remote debugger, which Steam turns on when this file
+    # exists. Before Steam has run once the folder is missing; Decky then works from the next start after Steam.
+    if [ -d "$1/.steam/steam" ]; then
+        touch "$1/.steam/steam/.cef-enable-remote-debugging"
+    fi
+' sh "$home"

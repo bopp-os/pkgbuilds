@@ -1,0 +1,30 @@
+--- a/backend/decky_loader/updater.py
++++ b/backend/decky_loader/updater.py
+@@ -41,7 +41,9 @@
+         self.remoteVer: RemoteVer | None = None
+         self.allRemoteVers: List[RemoteVer] = []
+         self.localVer = helpers.get_loader_version()
+-        self.isSupported: bool = ON_LINUX
++        # BoppOS: the package manager updates Decky. The built-in updater would put an upstream binary in the
++        # working directory and replace the systemd unit, so it stays off, and the UI shows updates as unsupported.
++        self.isSupported: bool = False
+         self.repo = getenv('DECKY_REPO', 'SteamDeckHomebrew/decky-loader')
+         self.git_branch = getenv('DECKY_BRANCH', 'dirty')
+ 
+@@ -228,7 +230,7 @@
+         await self.do_restart()
+ 
+     async def do_update(self):
+-        logger.debug("Starting update.")
++        raise Exception("Decky Loader is updated by the system package manager on this system")
+         try:
+             assert self.remoteVer
+         except AssertionError:
+@@ -304,6 +306,7 @@
+         return result
+ 
+     async def download_testing_version(self, pr_id: int, sha_id: str):
++        raise Exception("Decky Loader is updated by the system package manager on this system")
+         down_id = ''
+         #Get all the associated workflow run for the given sha_id code hash
+         async with ClientSession() as web:
