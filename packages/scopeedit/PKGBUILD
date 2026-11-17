@@ -1,0 +1,25 @@
+# Maintainer: BoppOS Team
+pkgname=scopeedit
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Editor for ScopeBuddy configs, with a terminal UI and a GTK4 GUI"
+arch=('any')
+url="https://github.com/bopp-os/scopeedit"
+license=('GPL-3.0-or-later')
+depends=('python' 'python-gobject' 'gtk4' 'glib2' 'pango')
+makedepends=('make')
+optdepends=('python-pick: terminal UI (scopeedit)'
+            'scopebuddy-git: runs games with the configs scopeedit edits')
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/bopp-os/scopeedit/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('68ab675605e0b648d266a4febccebb4733fc5bc49eca9ce17d93061222a58cd0')
+
+check() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  make check
+}
+
+package() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  make DESTDIR="${pkgdir}" PREFIX=/usr install
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

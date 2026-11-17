@@ -1,0 +1,19 @@
+pkgbase = scopeedit
+	pkgdesc = Editor for ScopeBuddy configs, with a terminal UI and a GTK4 GUI
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/bopp-os/scopeedit
+	arch = any
+	license = GPL-3.0-or-later
+	makedepends = make
+	depends = python
+	depends = python-gobject
+	depends = gtk4
+	depends = glib2
+	depends = pango
+	optdepends = python-pick: terminal UI (scopeedit)
+	optdepends = scopebuddy-git: runs games with the configs scopeedit edits
+	source = scopeedit-0.1.0.tar.gz::https://github.com/bopp-os/scopeedit/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = 68ab675605e0b648d266a4febccebb4733fc5bc49eca9ce17d93061222a58cd0
+
+pkgname = scopeedit
